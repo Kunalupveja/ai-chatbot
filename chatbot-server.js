@@ -110,10 +110,7 @@ async function sendWhatsAppMessage(to, message) {
  */
 async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
   try {
-    const model = genAI.getGenerativeModel({ 
-      model: 'gemini-1.5-flash',
-      systemInstruction: SYSTEM_PROMPT
-    });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     
     // Get or create conversation history
     if (!conversationHistory.has(phoneNumber)) {
@@ -122,54 +119,61 @@ async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
     
     const history = conversationHistory.get(phoneNumber);
     
-    // For new leads, create a contextual first message
-    let messageToSend = userMessage;
+    // Build the prompt with system instructions and context
+    let fullPrompt = SYSTEM_PROMPT + '\n\n';
+    
+    // Add lead context for first message
     if (leadInfo && history.length === 0) {
-      messageToSend = `Hi! I'm ${leadInfo.name}. I'm interested in ${leadInfo.industry || 'your weight loss services'}.`;
+      fullPrompt += `New lead information:\n`;
+      fullPrompt += `- Name: ${leadInfo.name}\n`;
+      fullPrompt += `- Interested in: ${leadInfo.industry || 'weight loss services'}\n`;
+      fullPrompt += `- Email: ${leadInfo.email}\n\n`;
+      fullPrompt += `Send a warm, personalized welcome message to ${leadInfo.name}. Keep it friendly and conversational (2-3 sentences).\n\n`;
     }
     
-    // Start chat with history
-    const chat = model.startChat({
-      history: history,
-      generationConfig: {
-        maxOutputTokens: 300,
-        temperature: 0.8,
-      },
-    });
+    // Add conversation history
+    if (history.length > 0) {
+      fullPrompt += 'Previous conversation:\n';
+      history.forEach(msg => {
+        if (msg.role === 'user') {
+          fullPrompt += `User: ${msg.text}\n`;
+        } else {
+          fullPrompt += `You: ${msg.text}\n`;
+        }
+      });
+      fullPrompt += '\n';
+    }
     
-    // Send message and get response
-    const result = await chat.sendMessage(messageToSend);
-    const response = await result.response.text();
+    // Add current message
+    fullPrompt += `User: ${userMessage}\n\nYour response:`;
+    
+    // Generate response
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    const text = response.text();
     
     // Add to history
-    history.push({
-      role: 'user',
-      parts: [{ text: messageToSend }]
-    });
+    history.push({ role: 'user', text: userMessage });
+    history.push({ role: 'assistant', text: text });
     
-    history.push({
-      role: 'model',
-      parts: [{ text: response }]
-    });
-    
-    // Keep only last 20 messages
+    // Keep only last 10 exchanges (20 messages)
     if (history.length > 20) {
       conversationHistory.set(phoneNumber, history.slice(-20));
     }
     
     console.log('✅ AI Response generated successfully');
-    return response;
+    return text;
     
   } catch (error) {
-    console.error('❌ Gemini API Error Details:', error.message);
-    console.error('Error stack:', error.stack);
+    console.error('❌ Gemini API Error:', error.message);
+    console.error('Error details:', error);
     
     // Return a fallback message if AI fails
     if (leadInfo) {
-      return `Hi ${leadInfo.name}! 👋 Thank you for your interest in ${leadInfo.industry || 'our weight loss services'}. We're excited to help you achieve your goals! A member of our team will reach out to you shortly. In the meantime, feel free to ask me any questions!`;
+      return `Hi ${leadInfo.name}! 👋 Thank you for your interest in ${leadInfo.industry || 'our services'}. We're excited to help you achieve your wellness goals! How can I assist you today?`;
     }
     
-    return "Thank you for your message! I'm here to help you with your weight loss journey. How can I assist you today?";
+    return "Thank you for your message! I'm here to help you with your wellness journey. How can I assist you today?";
   }
 }
 
