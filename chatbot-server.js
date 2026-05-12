@@ -110,58 +110,66 @@ async function sendWhatsAppMessage(to, message) {
  */
 async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-1.5-flash',
+      systemInstruction: SYSTEM_PROMPT
+    });
     
     // Get or create conversation history
     if (!conversationHistory.has(phoneNumber)) {
       conversationHistory.set(phoneNumber, []);
-      
-      // Add initial context if this is a new lead
-      if (leadInfo) {
-        const contextMessage = `New lead: ${leadInfo.name}, interested in ${leadInfo.industry || 'weight loss services'}. Start the conversation warmly.`;
-        conversationHistory.get(phoneNumber).push({
-          role: 'user',
-          parts: [{ text: contextMessage }]
-        });
-      }
     }
     
     const history = conversationHistory.get(phoneNumber);
     
-    // Add user message to history
-    history.push({
-      role: 'user',
-      parts: [{ text: userMessage }]
-    });
+    // For new leads, create a contextual first message
+    let messageToSend = userMessage;
+    if (leadInfo && history.length === 0) {
+      messageToSend = `Hi! I'm ${leadInfo.name}. I'm interested in ${leadInfo.industry || 'your weight loss services'}.`;
+    }
     
     // Start chat with history
     const chat = model.startChat({
-      history: history.slice(0, -1), // All except the last message
+      history: history,
       generationConfig: {
-        maxOutputTokens: 200,
-        temperature: 0.7,
+        maxOutputTokens: 300,
+        temperature: 0.8,
       },
     });
     
     // Send message and get response
-    const result = await chat.sendMessage(userMessage);
-    const response = result.response.text();
+    const result = await chat.sendMessage(messageToSend);
+    const response = await result.response.text();
     
-    // Add AI response to history
+    // Add to history
+    history.push({
+      role: 'user',
+      parts: [{ text: messageToSend }]
+    });
+    
     history.push({
       role: 'model',
       parts: [{ text: response }]
     });
     
-    // Keep only last 20 messages to avoid token limits
+    // Keep only last 20 messages
     if (history.length > 20) {
       conversationHistory.set(phoneNumber, history.slice(-20));
     }
     
+    console.log('✅ AI Response generated successfully');
     return response;
+    
   } catch (error) {
-    console.error('❌ Error calling Gemini API:', error);
-    throw new Error('Failed to generate AI response');
+    console.error('❌ Gemini API Error Details:', error.message);
+    console.error('Error stack:', error.stack);
+    
+    // Return a fallback message if AI fails
+    if (leadInfo) {
+      return `Hi ${leadInfo.name}! 👋 Thank you for your interest in ${leadInfo.industry || 'our weight loss services'}. We're excited to help you achieve your goals! A member of our team will reach out to you shortly. In the meantime, feel free to ask me any questions!`;
+    }
+    
+    return "Thank you for your message! I'm here to help you with your weight loss journey. How can I assist you today?";
   }
 }
 
