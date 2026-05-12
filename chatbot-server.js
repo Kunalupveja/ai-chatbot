@@ -110,7 +110,7 @@ async function sendWhatsAppMessage(to, message) {
  */
 async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     
     // Get or create conversation history
     if (!conversationHistory.has(phoneNumber)) {
