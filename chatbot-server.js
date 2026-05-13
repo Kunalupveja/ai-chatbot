@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const axios = require('axios');
-const { MongoClient } = require('mongodb');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,25 +11,45 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// MongoDB connection
-let db;
-let leadsCollection;
-let conversationsCollection;
+// PostgreSQL connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
-async function connectDB() {
+// Initialize database tables
+async function initDB() {
   try {
-    const client = new MongoClient(process.env.MONGODB_URI);
-    await client.connect();
-    db = client.db('chatbot');
-    leadsCollection = db.collection('leads');
-    conversationsCollection = db.collection('conversations');
-    console.log('✅ Connected to MongoDB');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS leads (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255),
+        phone VARCHAR(50),
+        email VARCHAR(255),
+        industry VARCHAR(255),
+        lead_source VARCHAR(255),
+        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        raw_data JSONB
+      )
+    `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        id SERIAL PRIMARY KEY,
+        phone_number VARCHAR(50) UNIQUE,
+        history JSONB DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    console.log('✅ Database tables initialized');
   } catch (error) {
-    console.error('❌ MongoDB connection error:', error);
+    console.error('❌ Database initialization error:', error);
   }
 }
 
-connectDB();
+initDB();
 
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -53,30 +73,15 @@ Remember: You're having a conversation, not giving a lecture. Be natural and eng
  */
 function extractLeadInfo(zohoPayload) {
   try {
-    console.log('🔍 Analyzing payload structure...');
+    let lead = zohoPayload.data?.[0] || zohoPayload;
     
-    let lead = null;
-    
-    if (zohoPayload.data && Array.isArray(zohoPayload.data) && zohoPayload.data.length > 0) {
-      lead = zohoPayload.data[0];
-    } else {
-      lead = zohoPayload;
-    }
-    
-    console.log('📋 Available fields:', Object.keys(lead));
-    
-    const extractedInfo = {
-      name: lead.Name || lead.Full_Name || lead.full_name || lead.name || 
-            (lead.First_Name ? `${lead.First_Name} ${lead.Last_Name || ''}`.trim() : 'Valued Customer'),
+    return {
+      name: lead.Name || lead.Full_Name || lead.full_name || lead.name || 'Valued Customer',
       phone: lead.Phone || lead.phone || lead.Mobile || lead.mobile || '',
       email: lead.Email || lead.email || '',
       industry: lead.Service || lead.Industry || lead.industry || lead.service || '',
       leadSource: lead.Lead_Source || lead.lead_source || lead.Source || lead.source || 'Unknown'
     };
-    
-    console.log('✅ Extracted info:', extractedInfo);
-    return extractedInfo;
-    
   } catch (error) {
     console.error('❌ Error extracting lead info:', error);
     throw new Error('Invalid Zoho webhook payload');
@@ -98,9 +103,7 @@ async function sendWhatsAppMessage(to, message) {
         messaging_product: 'whatsapp',
         to: cleanPhone,
         type: 'text',
-        text: {
-          body: message
-        }
+        text: { body: message }
       },
       {
         headers: {
@@ -110,10 +113,10 @@ async function sendWhatsAppMessage(to, message) {
       }
     );
 
-    console.log('✅ WhatsApp message sent:', response.data);
+    console.log('✅ WhatsApp message sent');
     return response.data;
   } catch (error) {
-    console.error('❌ Error sending WhatsApp message:', error.response?.data || error.message);
+    console.error('❌ Error sending WhatsApp:', error.response?.data || error.message);
     throw new Error('Failed to send WhatsApp message');
   }
 }
@@ -126,30 +129,23 @@ async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     
     // Get conversation history from database
-    let conversation = await conversationsCollection.findOne({ phoneNumber });
+    const result = await pool.query(
+      'SELECT history FROM conversations WHERE phone_number = $1',
+      [phoneNumber]
+    );
     
-    if (!conversation) {
-      conversation = {
-        phoneNumber,
-        history: [],
-        createdAt: new Date()
-      };
-    }
+    let history = result.rows[0]?.history || [];
     
-    // Build the prompt
+    // Build prompt
     let fullPrompt = SYSTEM_PROMPT + '\n\n';
     
-    if (leadInfo && conversation.history.length === 0) {
-      fullPrompt += `New lead information:\n`;
-      fullPrompt += `- Name: ${leadInfo.name}\n`;
-      fullPrompt += `- Interested in: ${leadInfo.industry || 'weight loss services'}\n`;
-      fullPrompt += `- Email: ${leadInfo.email}\n\n`;
-      fullPrompt += `Send a warm, personalized welcome message to ${leadInfo.name}. Keep it friendly and conversational (2-3 sentences).\n\n`;
+    if (leadInfo && history.length === 0) {
+      fullPrompt += `New lead: ${leadInfo.name}, interested in ${leadInfo.industry || 'weight loss services'}.\n\n`;
     }
     
-    if (conversation.history.length > 0) {
+    if (history.length > 0) {
       fullPrompt += 'Previous conversation:\n';
-      conversation.history.slice(-10).forEach(msg => {
+      history.slice(-10).forEach(msg => {
         fullPrompt += `${msg.role === 'user' ? 'User' : 'You'}: ${msg.text}\n`;
       });
       fullPrompt += '\n';
@@ -157,75 +153,59 @@ async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
     
     fullPrompt += `User: ${userMessage}\n\nYour response:`;
     
-    console.log('🔍 Calling Gemini API...');
-    
-    const result = await model.generateContent(fullPrompt);
-    const response = await result.response;
+    const aiResult = await model.generateContent(fullPrompt);
+    const response = await aiResult.response;
     const text = response.text();
     
     // Save to database
-    conversation.history.push({ role: 'user', text: userMessage, timestamp: new Date() });
-    conversation.history.push({ role: 'assistant', text: text, timestamp: new Date() });
-    conversation.updatedAt = new Date();
+    history.push({ role: 'user', text: userMessage, timestamp: new Date() });
+    history.push({ role: 'assistant', text: text, timestamp: new Date() });
     
-    await conversationsCollection.updateOne(
-      { phoneNumber },
-      { $set: conversation },
-      { upsert: true }
-    );
+    await pool.query(`
+      INSERT INTO conversations (phone_number, history, updated_at)
+      VALUES ($1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (phone_number)
+      DO UPDATE SET history = $2, updated_at = CURRENT_TIMESTAMP
+    `, [phoneNumber, JSON.stringify(history)]);
     
-    console.log('✅ AI Response generated and saved');
+    console.log('✅ AI response generated and saved');
     return text;
     
   } catch (error) {
     console.error('❌ Gemini API Error:', error.message);
     
     if (leadInfo) {
-      return `Hi ${leadInfo.name}! 👋\n\nThank you for your interest in ${leadInfo.industry || 'our services'}. We're excited to help you achieve your wellness goals!\n\nOur team specializes in personalized care and we'd love to discuss how we can support your journey. What specific goals do you have in mind?`;
+      return `Hi ${leadInfo.name}! 👋\n\nThank you for your interest in ${leadInfo.industry || 'our services'}. We're excited to help you achieve your wellness goals!\n\nHow can I assist you today?`;
     }
     
-    return "Thank you for your message! I'm here to help you with your wellness journey. How can I assist you today?";
+    return "Thank you for your message! I'm here to help. How can I assist you today?";
   }
 }
 
 /**
- * Zoho CRM Webhook - New Lead
+ * Zoho CRM Webhook
  */
 app.post('/webhook/zoho-lead', async (req, res) => {
-  console.log('\n========================================');
-  console.log('🎉 NEW LEAD FROM ZOHO CRM!');
-  console.log('========================================');
+  console.log('\n🎉 NEW LEAD FROM ZOHO CRM!');
 
   try {
-    const combinedData = { ...req.body, ...req.query };
-    const leadInfo = extractLeadInfo(combinedData);
+    const leadInfo = extractLeadInfo({ ...req.body, ...req.query });
     
-    // Save lead to database
-    const leadEntry = {
-      ...leadInfo,
-      receivedAt: new Date(),
-      rawData: combinedData
-    };
+    // Save to database
+    await pool.query(`
+      INSERT INTO leads (name, phone, email, industry, lead_source, raw_data)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [leadInfo.name, leadInfo.phone, leadInfo.email, leadInfo.industry, leadInfo.leadSource, JSON.stringify(req.body)]);
     
-    await leadsCollection.insertOne(leadEntry);
     console.log('✅ Lead saved to database');
 
     if (!leadInfo.phone) {
-      return res.status(400).json({
-        success: false,
-        error: 'Phone number is required'
-      });
+      return res.status(400).json({ success: false, error: 'Phone number required' });
     }
 
-    const hasGeminiKey = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here';
-    const hasMetaConfig = process.env.META_ACCESS_TOKEN && process.env.META_ACCESS_TOKEN !== 'your_meta_access_token_here';
-
-    if (!hasGeminiKey || !hasMetaConfig) {
-      return res.status(200).json({
-        success: true,
-        message: 'Lead received (Testing Mode)',
-        data: leadInfo
-      });
+    const hasKeys = process.env.GEMINI_API_KEY && process.env.META_ACCESS_TOKEN;
+    if (!hasKeys) {
+      return res.json({ success: true, message: 'Testing mode', data: leadInfo });
     }
 
     console.log('🤖 Generating welcome message...');
@@ -234,75 +214,55 @@ app.post('/webhook/zoho-lead', async (req, res) => {
       `Hi, I'm ${leadInfo.name}. I'm interested in ${leadInfo.industry || 'weight loss services'}.`,
       leadInfo
     );
-    
-    console.log('💬 AI Response:', welcomeMessage);
 
-    console.log('📱 Sending WhatsApp message...');
+    console.log('📱 Sending WhatsApp...');
     await sendWhatsAppMessage(leadInfo.phone, welcomeMessage);
 
-    res.status(200).json({
+    res.json({
       success: true,
-      message: 'Lead processed and WhatsApp conversation started',
-      data: {
-        leadName: leadInfo.name,
-        phone: leadInfo.phone,
-        welcomeMessage: welcomeMessage
-      }
+      message: 'Lead processed',
+      data: { leadName: leadInfo.name, phone: leadInfo.phone }
     });
 
   } catch (error) {
     console.error('❌ Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
- * Meta WhatsApp Webhook - Verification
+ * WhatsApp Webhook - Verification
  */
 app.get('/webhook/whatsapp', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  console.log('📞 WhatsApp webhook verification attempt');
-
+  const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
+  
   if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
     console.log('✅ WhatsApp webhook verified');
     res.status(200).send(challenge);
   } else {
-    console.log('❌ WhatsApp webhook verification failed');
     res.sendStatus(403);
   }
 });
 
 /**
- * Meta WhatsApp Webhook - Receive Messages
+ * WhatsApp Webhook - Receive Messages
  */
 app.post('/webhook/whatsapp', async (req, res) => {
-  console.log('\n========================================');
-  console.log('📱 WHATSAPP MESSAGE RECEIVED');
-  console.log('========================================');
+  console.log('\n📱 WHATSAPP MESSAGE RECEIVED');
   
   try {
-    const body = req.body;
-
-    if (body.object === 'whatsapp_business_account') {
-      for (const entry of body.entry) {
+    if (req.body.object === 'whatsapp_business_account') {
+      for (const entry of req.body.entry) {
         for (const change of entry.changes) {
           if (change.field === 'messages' && change.value.messages) {
             for (const message of change.value.messages) {
-              const from = message.from;
-              const messageBody = message.text?.body;
-
-              if (message.type === 'text' && messageBody) {
-                console.log(`From: ${from}, Message: ${messageBody}`);
-
-                const aiResponse = await generateAIResponse(from, messageBody);
-                console.log('💬 AI Response:', aiResponse);
-
+              if (message.type === 'text' && message.text?.body) {
+                const from = message.from;
+                const text = message.text.body;
+                
+                console.log(`From: ${from}, Message: ${text}`);
+                
+                const aiResponse = await generateAIResponse(from, text);
                 await sendWhatsAppMessage(from, aiResponse);
               }
             }
@@ -310,10 +270,9 @@ app.post('/webhook/whatsapp', async (req, res) => {
         }
       }
     }
-
     res.sendStatus(200);
   } catch (error) {
-    console.error('❌ Error processing WhatsApp message:', error);
+    console.error('❌ Error:', error);
     res.sendStatus(500);
   }
 });
@@ -322,8 +281,13 @@ app.post('/webhook/whatsapp', async (req, res) => {
  * Dashboard
  */
 app.get('/', async (req, res) => {
-  const leads = await leadsCollection.find().sort({ receivedAt: -1 }).limit(50).toArray();
-  const conversationCount = await conversationsCollection.countDocuments();
+  const leadsResult = await pool.query('SELECT * FROM leads ORDER BY received_at DESC LIMIT 50');
+  const statsResult = await pool.query('SELECT COUNT(*) as total_leads FROM leads');
+  const convoResult = await pool.query('SELECT COUNT(*) as total_convos FROM conversations');
+  
+  const leads = leadsResult.rows;
+  const totalLeads = statsResult.rows[0].total_leads;
+  const totalConvos = convoResult.rows[0].total_convos;
   
   const html = `
 <!DOCTYPE html>
@@ -387,20 +351,20 @@ app.get('/', async (req, res) => {
     <div class="container">
         <div class="header">
             <h1>🤖 AI Chatbot Dashboard</h1>
-            <p style="color: #6b7280; margin-top: 5px;">MongoDB + Gemini AI + WhatsApp</p>
+            <p style="color: #6b7280; margin-top: 5px;">PostgreSQL + Gemini AI + WhatsApp</p>
             
             <div class="stats">
                 <div class="stat-box">
-                    <div class="stat-number">${leads.length}</div>
+                    <div class="stat-number">${totalLeads}</div>
                     <div class="stat-label">Total Leads</div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-number">${conversationCount}</div>
+                    <div class="stat-number">${totalConvos}</div>
                     <div class="stat-label">Conversations</div>
                 </div>
                 <div class="stat-box">
                     <div class="stat-number">✅</div>
-                    <div class="stat-label">Database Connected</div>
+                    <div class="stat-label">PostgreSQL Connected</div>
                 </div>
             </div>
         </div>
@@ -412,7 +376,7 @@ app.get('/', async (req, res) => {
                     <div class="info-item"><span class="info-label">📱 Phone:</span> ${lead.phone}</div>
                     <div class="info-item"><span class="info-label">📧 Email:</span> ${lead.email || 'N/A'}</div>
                     <div class="info-item"><span class="info-label">🏢 Service:</span> <span class="badge">${lead.industry}</span></div>
-                    <div class="info-item"><span class="info-label">⏰ Received:</span> ${new Date(lead.receivedAt).toLocaleString()}</div>
+                    <div class="info-item"><span class="info-label">⏰ Received:</span> ${new Date(lead.received_at).toLocaleString()}</div>
                 </div>
             `).join('')}
         </div>
@@ -427,7 +391,7 @@ app.get('/', async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    database: db ? 'connected' : 'disconnected',
+    database: 'PostgreSQL',
     timestamp: new Date().toISOString()
   });
 });
