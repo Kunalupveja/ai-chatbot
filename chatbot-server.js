@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const axios = require('axios');
-const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,50 +10,13 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// PostgreSQL connection
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
-
-// Initialize database tables
-async function initDB() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS leads (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255),
-        phone VARCHAR(50),
-        email VARCHAR(255),
-        industry VARCHAR(255),
-        lead_source VARCHAR(255),
-        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        raw_data JSONB
-      )
-    `);
-    
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS conversations (
-        id SERIAL PRIMARY KEY,
-        phone_number VARCHAR(50) UNIQUE,
-        history JSONB DEFAULT '[]',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    
-    console.log('✅ Database tables initialized');
-  } catch (error) {
-    console.error('❌ Database initialization error:', error);
-  }
-}
-
-initDB();
+// In-memory storage
+const receivedLeads = [];
+const conversationHistory = new Map();
 
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Weight loss business system prompt
 const SYSTEM_PROMPT = `You are a friendly AI assistant for ${process.env.BUSINESS_NAME || 'a professional weight loss and wellness business'}. Your role is to:
 
 1. Warmly engage with potential clients who have expressed interest in weight loss services
@@ -68,75 +30,57 @@ const SYSTEM_PROMPT = `You are a friendly AI assistant for ${process.env.BUSINES
 
 Remember: You're having a conversation, not giving a lecture. Be natural and engaging!`;
 
-/**
- * Extract lead information from Zoho CRM webhook payload
- */
 function extractLeadInfo(zohoPayload) {
   try {
     let lead = zohoPayload.data?.[0] || zohoPayload;
     
     return {
-      name: lead.Name || lead.Full_Name || lead.full_name || lead.name || 'Valued Customer',
-      phone: lead.Phone || lead.phone || lead.Mobile || lead.mobile || '',
-      email: lead.Email || lead.email || '',
-      industry: lead.Service || lead.Industry || lead.industry || lead.service || '',
-      leadSource: lead.Lead_Source || lead.lead_source || lead.Source || lead.source || 'Unknown'
+      name: lead.Name || lead.Full_Name || 'Valued Customer',
+      phone: lead.Phone || lead.Mobile || '',
+      email: lead.Email || '',
+      industry: lead.Service || lead.Industry || '',
+      leadSource: lead.Lead_Source || lead.Source || 'Unknown'
     };
   } catch (error) {
-    console.error('❌ Error extracting lead info:', error);
-    throw new Error('Invalid Zoho webhook payload');
+    console.error('❌ Error extracting lead:', error);
+    throw new Error('Invalid payload');
   }
 }
 
-/**
- * Send WhatsApp message via Meta Cloud API
- */
 async function sendWhatsAppMessage(to, message) {
   try {
-    let cleanPhone = to.replace(/[^\d]/g, '');
-    
+    const cleanPhone = to.replace(/[^\d]/g, '');
     const url = `https://graph.facebook.com/v18.0/${process.env.META_PHONE_NUMBER_ID}/messages`;
     
-    const response = await axios.post(
-      url,
-      {
-        messaging_product: 'whatsapp',
-        to: cleanPhone,
-        type: 'text',
-        text: { body: message }
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.META_ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
+    const response = await axios.post(url, {
+      messaging_product: 'whatsapp',
+      to: cleanPhone,
+      type: 'text',
+      text: { body: message }
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.META_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json'
       }
-    );
+    });
 
-    console.log('✅ WhatsApp message sent');
+    console.log('✅ WhatsApp sent');
     return response.data;
   } catch (error) {
-    console.error('❌ Error sending WhatsApp:', error.response?.data || error.message);
-    throw new Error('Failed to send WhatsApp message');
+    console.error('❌ WhatsApp error:', error.response?.data || error.message);
+    throw error;
   }
 }
 
-/**
- * Generate AI response using Gemini
- */
 async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
   try {
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     
-    // Get conversation history from database
-    const result = await pool.query(
-      'SELECT history FROM conversations WHERE phone_number = $1',
-      [phoneNumber]
-    );
+    if (!conversationHistory.has(phoneNumber)) {
+      conversationHistory.set(phoneNumber, []);
+    }
     
-    let history = result.rows[0]?.history || [];
-    
-    // Build prompt
+    const history = conversationHistory.get(phoneNumber);
     let fullPrompt = SYSTEM_PROMPT + '\n\n';
     
     if (leadInfo && history.length === 0) {
@@ -153,62 +97,51 @@ async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
     
     fullPrompt += `User: ${userMessage}\n\nYour response:`;
     
-    const aiResult = await model.generateContent(fullPrompt);
-    const response = await aiResult.response;
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
     const text = response.text();
     
-    // Save to database
-    history.push({ role: 'user', text: userMessage, timestamp: new Date() });
-    history.push({ role: 'assistant', text: text, timestamp: new Date() });
+    history.push({ role: 'user', text: userMessage });
+    history.push({ role: 'assistant', text: text });
     
-    await pool.query(`
-      INSERT INTO conversations (phone_number, history, updated_at)
-      VALUES ($1, $2, CURRENT_TIMESTAMP)
-      ON CONFLICT (phone_number)
-      DO UPDATE SET history = $2, updated_at = CURRENT_TIMESTAMP
-    `, [phoneNumber, JSON.stringify(history)]);
+    if (history.length > 20) {
+      conversationHistory.set(phoneNumber, history.slice(-20));
+    }
     
-    console.log('✅ AI response generated and saved');
+    console.log('✅ AI response generated');
     return text;
     
   } catch (error) {
-    console.error('❌ Gemini API Error:', error.message);
+    console.error('❌ AI error:', error.message);
     
     if (leadInfo) {
       return `Hi ${leadInfo.name}! 👋\n\nThank you for your interest in ${leadInfo.industry || 'our services'}. We're excited to help you achieve your wellness goals!\n\nHow can I assist you today?`;
     }
-    
-    return "Thank you for your message! I'm here to help. How can I assist you today?";
+    return "Thank you for your message! How can I help you today?";
   }
 }
 
-/**
- * Zoho CRM Webhook
- */
+// Zoho Webhook
 app.post('/webhook/zoho-lead', async (req, res) => {
-  console.log('\n🎉 NEW LEAD FROM ZOHO CRM!');
+  console.log('\n🎉 NEW LEAD FROM ZOHO!');
 
   try {
     const leadInfo = extractLeadInfo({ ...req.body, ...req.query });
     
-    // Save to database
-    await pool.query(`
-      INSERT INTO leads (name, phone, email, industry, lead_source, raw_data)
-      VALUES ($1, $2, $3, $4, $5, $6)
-    `, [leadInfo.name, leadInfo.phone, leadInfo.email, leadInfo.industry, leadInfo.leadSource, JSON.stringify(req.body)]);
+    receivedLeads.unshift({
+      ...leadInfo,
+      receivedAt: new Date().toISOString()
+    });
     
-    console.log('✅ Lead saved to database');
+    if (receivedLeads.length > 100) receivedLeads.pop();
+    
+    console.log('✅ Lead stored:', leadInfo.name);
 
     if (!leadInfo.phone) {
-      return res.status(400).json({ success: false, error: 'Phone number required' });
+      return res.status(400).json({ success: false, error: 'Phone required' });
     }
 
-    const hasKeys = process.env.GEMINI_API_KEY && process.env.META_ACCESS_TOKEN;
-    if (!hasKeys) {
-      return res.json({ success: true, message: 'Testing mode', data: leadInfo });
-    }
-
-    console.log('🤖 Generating welcome message...');
+    console.log('🤖 Generating message...');
     const welcomeMessage = await generateAIResponse(
       leadInfo.phone,
       `Hi, I'm ${leadInfo.name}. I'm interested in ${leadInfo.industry || 'weight loss services'}.`,
@@ -218,11 +151,7 @@ app.post('/webhook/zoho-lead', async (req, res) => {
     console.log('📱 Sending WhatsApp...');
     await sendWhatsAppMessage(leadInfo.phone, welcomeMessage);
 
-    res.json({
-      success: true,
-      message: 'Lead processed',
-      data: { leadName: leadInfo.name, phone: leadInfo.phone }
-    });
+    res.json({ success: true, message: 'Lead processed' });
 
   } catch (error) {
     console.error('❌ Error:', error);
@@ -230,25 +159,21 @@ app.post('/webhook/zoho-lead', async (req, res) => {
   }
 });
 
-/**
- * WhatsApp Webhook - Verification
- */
+// WhatsApp Webhook - Verification
 app.get('/webhook/whatsapp', (req, res) => {
   const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
   
   if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
-    console.log('✅ WhatsApp webhook verified');
+    console.log('✅ WhatsApp verified');
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
   }
 });
 
-/**
- * WhatsApp Webhook - Receive Messages
- */
+// WhatsApp Webhook - Messages
 app.post('/webhook/whatsapp', async (req, res) => {
-  console.log('\n📱 WHATSAPP MESSAGE RECEIVED');
+  console.log('\n📱 WHATSAPP MESSAGE');
   
   try {
     if (req.body.object === 'whatsapp_business_account') {
@@ -260,7 +185,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
                 const from = message.from;
                 const text = message.text.body;
                 
-                console.log(`From: ${from}, Message: ${text}`);
+                console.log(`From: ${from}`);
                 
                 const aiResponse = await generateAIResponse(from, text);
                 await sendWhatsAppMessage(from, aiResponse);
@@ -277,18 +202,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
   }
 });
 
-/**
- * Dashboard
- */
-app.get('/', async (req, res) => {
-  const leadsResult = await pool.query('SELECT * FROM leads ORDER BY received_at DESC LIMIT 50');
-  const statsResult = await pool.query('SELECT COUNT(*) as total_leads FROM leads');
-  const convoResult = await pool.query('SELECT COUNT(*) as total_convos FROM conversations');
-  
-  const leads = leadsResult.rows;
-  const totalLeads = statsResult.rows[0].total_leads;
-  const totalConvos = convoResult.rows[0].total_convos;
-  
+// Dashboard
+app.get('/', (req, res) => {
   const html = `
 <!DOCTYPE html>
 <html>
@@ -312,7 +227,7 @@ app.get('/', async (req, res) => {
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             margin-bottom: 30px;
         }
-        h1 { color: #667eea; font-size: 32px; margin-bottom: 10px; }
+        h1 { color: #667eea; font-size: 32px; }
         .stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -327,16 +242,15 @@ app.get('/', async (req, res) => {
         }
         .stat-number { font-size: 36px; font-weight: bold; }
         .stat-label { font-size: 14px; opacity: 0.9; margin-top: 5px; }
-        .leads-container { display: grid; gap: 20px; }
         .lead-card {
             background: white;
             padding: 25px;
             border-radius: 15px;
             box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
         .lead-name { font-size: 24px; font-weight: bold; color: #1f2937; margin-bottom: 15px; }
         .info-item { margin: 10px 0; }
-        .info-label { font-weight: 600; color: #667eea; }
         .badge {
             display: inline-block;
             padding: 4px 12px;
@@ -351,54 +265,49 @@ app.get('/', async (req, res) => {
     <div class="container">
         <div class="header">
             <h1>🤖 AI Chatbot Dashboard</h1>
-            <p style="color: #6b7280; margin-top: 5px;">PostgreSQL + Gemini AI + WhatsApp</p>
+            <p style="color: #6b7280; margin-top: 5px;">Gemini AI + WhatsApp + Zoho CRM</p>
             
             <div class="stats">
                 <div class="stat-box">
-                    <div class="stat-number">${totalLeads}</div>
+                    <div class="stat-number">${receivedLeads.length}</div>
                     <div class="stat-label">Total Leads</div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-number">${totalConvos}</div>
-                    <div class="stat-label">Conversations</div>
+                    <div class="stat-number">${conversationHistory.size}</div>
+                    <div class="stat-label">Active Conversations</div>
                 </div>
                 <div class="stat-box">
                     <div class="stat-number">✅</div>
-                    <div class="stat-label">PostgreSQL Connected</div>
+                    <div class="stat-label">System Online</div>
                 </div>
             </div>
         </div>
 
-        <div class="leads-container">
-            ${leads.map(lead => `
-                <div class="lead-card">
-                    <div class="lead-name">👤 ${lead.name}</div>
-                    <div class="info-item"><span class="info-label">📱 Phone:</span> ${lead.phone}</div>
-                    <div class="info-item"><span class="info-label">📧 Email:</span> ${lead.email || 'N/A'}</div>
-                    <div class="info-item"><span class="info-label">🏢 Service:</span> <span class="badge">${lead.industry}</span></div>
-                    <div class="info-item"><span class="info-label">⏰ Received:</span> ${new Date(lead.received_at).toLocaleString()}</div>
-                </div>
-            `).join('')}
-        </div>
+        ${receivedLeads.map(lead => `
+            <div class="lead-card">
+                <div class="lead-name">👤 ${lead.name}</div>
+                <div class="info-item">📱 Phone: ${lead.phone}</div>
+                <div class="info-item">📧 Email: ${lead.email || 'N/A'}</div>
+                <div class="info-item">🏢 Service: <span class="badge">${lead.industry}</span></div>
+                <div class="info-item">⏰ ${new Date(lead.receivedAt).toLocaleString()}</div>
+            </div>
+        `).join('')}
     </div>
 </body>
 </html>
   `;
-  
   res.send(html);
 });
 
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    database: 'PostgreSQL',
-    timestamp: new Date().toISOString()
+    leads: receivedLeads.length,
+    conversations: conversationHistory.size
   });
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 AI Chatbot Server running on port ${PORT}`);
-  console.log(`📍 Zoho Webhook: http://localhost:${PORT}/webhook/zoho-lead`);
-  console.log(`📍 WhatsApp Webhook: http://localhost:${PORT}/webhook/whatsapp`);
-  console.log(`📊 Dashboard: http://localhost:${PORT}`);
+  console.log(`📍 Dashboard: http://localhost:${PORT}`);
 });
