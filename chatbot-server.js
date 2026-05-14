@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 
 const app = express();
@@ -10,9 +11,11 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// In-memory storage
-const receivedLeads = [];
-const conversationHistory = new Map();
+// Initialize Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -218,6 +221,104 @@ IMPORTANT GUIDELINES:
 
 Remember: You're having a supportive conversation with someone taking a brave step toward better health. Be warm, informative, specific, and encouraging!`;
 
+// Database Functions
+async function saveLead(leadInfo) {
+  try {
+    const { data, error } = await supabase
+      .from('leads')
+      .insert([{
+        name: leadInfo.name,
+        phone: leadInfo.phone,
+        email: leadInfo.email,
+        industry: leadInfo.industry,
+        lead_source: leadInfo.leadSource,
+        received_at: new Date().toISOString()
+      }])
+      .select();
+
+    if (error) throw error;
+    console.log('✅ Lead saved to database');
+    return data[0];
+  } catch (error) {
+    console.error('❌ Database error:', error.message);
+    return null;
+  }
+}
+
+async function saveConversation(phoneNumber, userMessage, aiResponse) {
+  try {
+    const { error } = await supabase
+      .from('conversations')
+      .insert([{
+        phone_number: phoneNumber,
+        user_message: userMessage,
+        ai_response: aiResponse,
+        created_at: new Date().toISOString()
+      }]);
+
+    if (error) throw error;
+    console.log('✅ Conversation saved');
+  } catch (error) {
+    console.error('❌ Conversation save error:', error.message);
+  }
+}
+
+async function getConversationHistory(phoneNumber, limit = 10) {
+  try {
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('phone_number', phoneNumber)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return data.reverse(); // Return oldest first
+  } catch (error) {
+    console.error('❌ Error fetching history:', error.message);
+    return [];
+  }
+}
+
+async function getAllLeads(limit = 100) {
+  try {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .order('received_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('❌ Error fetching leads:', error.message);
+    return [];
+  }
+}
+
+async function getStats() {
+  try {
+    const { count: leadsCount } = await supabase
+      .from('leads')
+      .select('*', { count: 'exact', head: true });
+
+    const { data: uniquePhones } = await supabase
+      .from('conversations')
+      .select('phone_number')
+      .limit(1000);
+
+    const uniqueCount = new Set(uniquePhones?.map(c => c.phone_number)).size;
+
+    return {
+      totalLeads: leadsCount || 0,
+      activeConversations: uniqueCount || 0
+    };
+  } catch (error) {
+    console.error('❌ Error fetching stats:', error.message);
+    return { totalLeads: 0, activeConversations: 0 };
+  }
+}
+
 function extractLeadInfo(zohoPayload) {
   try {
     let lead = zohoPayload.data?.[0] || zohoPayload;
@@ -264,11 +365,9 @@ async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
   try {
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     
-    if (!conversationHistory.has(phoneNumber)) {
-      conversationHistory.set(phoneNumber, []);
-    }
+    // Get conversation history from database
+    const history = await getConversationHistory(phoneNumber, 10);
     
-    const history = conversationHistory.get(phoneNumber);
     let fullPrompt = SYSTEM_PROMPT + '\n\n';
     
     if (leadInfo && history.length === 0) {
@@ -277,8 +376,9 @@ async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
     
     if (history.length > 0) {
       fullPrompt += 'Previous conversation:\n';
-      history.slice(-10).forEach(msg => {
-        fullPrompt += `${msg.role === 'user' ? 'User' : 'You'}: ${msg.text}\n`;
+      history.forEach(msg => {
+        fullPrompt += `User: ${msg.user_message}\n`;
+        fullPrompt += `You: ${msg.ai_response}\n`;
       });
       fullPrompt += '\n';
     }
@@ -289,12 +389,8 @@ async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
     const response = await result.response;
     const text = response.text();
     
-    history.push({ role: 'user', text: userMessage });
-    history.push({ role: 'assistant', text: text });
-    
-    if (history.length > 20) {
-      conversationHistory.set(phoneNumber, history.slice(-20));
-    }
+    // Save conversation to database
+    await saveConversation(phoneNumber, userMessage, text);
     
     console.log('✅ AI response generated');
     return text;
@@ -316,14 +412,10 @@ app.post('/webhook/zoho-lead', async (req, res) => {
   try {
     const leadInfo = extractLeadInfo({ ...req.body, ...req.query });
     
-    receivedLeads.unshift({
-      ...leadInfo,
-      receivedAt: new Date().toISOString()
-    });
+    // Save to database
+    await saveLead(leadInfo);
     
-    if (receivedLeads.length > 100) receivedLeads.pop();
-    
-    console.log('✅ Lead stored:', leadInfo.name);
+    console.log('✅ Lead processed:', leadInfo.name);
 
     if (!leadInfo.phone) {
       return res.status(400).json({ success: false, error: 'Phone required' });
@@ -391,12 +483,15 @@ app.post('/webhook/whatsapp', async (req, res) => {
 });
 
 // Dashboard
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
+  const leads = await getAllLeads(50);
+  const stats = await getStats();
+  
   const html = `
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AI Chatbot Dashboard</title>
+    <title>AI Chatbot Dashboard - Supabase</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
@@ -416,6 +511,15 @@ app.get('/', (req, res) => {
             margin-bottom: 30px;
         }
         h1 { color: #667eea; font-size: 32px; }
+        .badge-db {
+            display: inline-block;
+            background: #10b981;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
         .stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -452,16 +556,16 @@ app.get('/', (req, res) => {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🤖 AI Chatbot Dashboard</h1>
-            <p style="color: #6b7280; margin-top: 5px;">Gemini AI + WhatsApp + Zoho CRM</p>
+            <h1>🤖 AI Chatbot Dashboard <span class="badge-db">🗄️ Supabase</span></h1>
+            <p style="color: #6b7280; margin-top: 5px;">Gemini AI + WhatsApp + Zoho CRM + Supabase Database</p>
             
             <div class="stats">
                 <div class="stat-box">
-                    <div class="stat-number">${receivedLeads.length}</div>
-                    <div class="stat-label">Total Leads</div>
+                    <div class="stat-number">${stats.totalLeads}</div>
+                    <div class="stat-label">Total Leads (Database)</div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-number">${conversationHistory.size}</div>
+                    <div class="stat-number">${stats.activeConversations}</div>
                     <div class="stat-label">Active Conversations</div>
                 </div>
                 <div class="stat-box">
@@ -471,13 +575,14 @@ app.get('/', (req, res) => {
             </div>
         </div>
 
-        ${receivedLeads.map(lead => `
+        ${leads.map(lead => `
             <div class="lead-card">
                 <div class="lead-name">👤 ${lead.name}</div>
                 <div class="info-item">📱 Phone: ${lead.phone}</div>
                 <div class="info-item">📧 Email: ${lead.email || 'N/A'}</div>
                 <div class="info-item">🏢 Service: <span class="badge">${lead.industry}</span></div>
-                <div class="info-item">⏰ ${new Date(lead.receivedAt).toLocaleString()}</div>
+                <div class="info-item">📍 Source: ${lead.lead_source}</div>
+                <div class="info-item">⏰ ${new Date(lead.received_at).toLocaleString()}</div>
             </div>
         `).join('')}
     </div>
@@ -487,15 +592,34 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  const stats = await getStats();
   res.json({
     status: 'healthy',
-    leads: receivedLeads.length,
-    conversations: conversationHistory.size
+    database: 'supabase',
+    ...stats
   });
 });
 
-app.listen(PORT, () => {
+// Test database connection on startup
+async function testDatabaseConnection() {
+  try {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('count')
+      .limit(1);
+    
+    if (error) throw error;
+    console.log('✅ Supabase connected successfully');
+  } catch (error) {
+    console.error('❌ Supabase connection error:', error.message);
+    console.log('⚠️  Server will continue but database features may not work');
+  }
+}
+
+app.listen(PORT, async () => {
   console.log(`🚀 AI Chatbot Server running on port ${PORT}`);
   console.log(`📍 Dashboard: http://localhost:${PORT}`);
+  console.log(`🗄️  Database: Supabase`);
+  await testDatabaseConnection();
 });
