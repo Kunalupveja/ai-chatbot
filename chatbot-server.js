@@ -445,13 +445,19 @@ async function getAllConversationsForDashboard() {
   }
 }
 
+// Normalize phone number - remove all non-digits
+function normalizePhone(phone) {
+  if (!phone) return '';
+  return phone.replace(/[^\d]/g, '');
+}
+
 function extractLeadInfo(zohoPayload) {
   try {
     let lead = zohoPayload.data?.[0] || zohoPayload;
     
     return {
       name: lead.Name || lead.Full_Name || 'Valued Customer',
-      phone: lead.Phone || lead.Mobile || '',
+      phone: normalizePhone(lead.Phone || lead.Mobile || ''),
       email: lead.Email || '',
       industry: lead.Service || lead.Industry || '',
       leadSource: lead.Lead_Source || lead.Source || 'Unknown'
@@ -464,7 +470,7 @@ function extractLeadInfo(zohoPayload) {
 
 async function sendWhatsAppMessage(to, message) {
   try {
-    const cleanPhone = to.replace(/[^\d]/g, '');
+    const cleanPhone = normalizePhone(to);
     const url = `https://graph.facebook.com/v18.0/${process.env.META_PHONE_NUMBER_ID}/messages`;
     
     const response = await axios.post(url, {
@@ -588,13 +594,15 @@ app.post('/webhook/whatsapp', async (req, res) => {
           if (change.field === 'messages' && change.value.messages) {
             for (const message of change.value.messages) {
               if (message.type === 'text' && message.text?.body) {
-                const from = message.from;
+                const from = normalizePhone(message.from);
                 const text = message.text.body;
                 
                 console.log(`From: ${from}`);
+                console.log(`Message: ${text}`);
                 
                 // Check conversation mode
                 const mode = await getConversationMode(from);
+                console.log(`Mode: ${mode.mode}, Agent: ${mode.agent_name || 'None'}`);
                 
                 if (mode.mode === 'agent') {
                   // Agent mode - just save message, don't respond
@@ -602,6 +610,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
                   await saveConversation(from, text, '', 'user');
                 } else {
                   // AI mode - generate and send response
+                  console.log('🤖 AI mode - generating response');
                   const aiResponse = await generateAIResponse(from, text);
                   await sendWhatsAppMessage(from, aiResponse);
                 }
@@ -653,7 +662,7 @@ app.get('/api/conversations', async (req, res) => {
 // Get messages for a conversation
 app.get('/api/conversations/:phone/messages', async (req, res) => {
   try {
-    const phone = decodeURIComponent(req.params.phone);
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
     const { data: messages, error } = await supabase
       .from('conversations')
       .select('*')
@@ -669,12 +678,29 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
       .eq('phone', phone)
       .single();
 
-    const formattedMessages = messages.map(msg => ({
-      type: msg.sent_by || 'ai',
-      text: msg.sent_by === 'user' ? msg.user_message : msg.ai_response,
-      timestamp: msg.created_at,
-      name: lead?.name || 'Customer'
-    }));
+    const formattedMessages = [];
+    
+    messages.forEach(msg => {
+      // Add user message if exists and not empty
+      if (msg.user_message && msg.user_message.trim() !== '' && msg.user_message !== 'EMPTY') {
+        formattedMessages.push({
+          type: 'user',
+          text: msg.user_message,
+          timestamp: msg.created_at,
+          name: lead?.name || 'Customer'
+        });
+      }
+      
+      // Add AI/agent response if exists and not empty
+      if (msg.ai_response && msg.ai_response.trim() !== '' && msg.ai_response !== 'EMPTY') {
+        formattedMessages.push({
+          type: msg.sent_by || 'ai',
+          text: msg.ai_response,
+          timestamp: msg.created_at,
+          name: lead?.name || 'Customer'
+        });
+      }
+    });
 
     res.json({ success: true, messages: formattedMessages });
   } catch (error) {
@@ -686,10 +712,18 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
 // Take over conversation
 app.post('/api/conversations/:phone/takeover', async (req, res) => {
   try {
-    const phone = decodeURIComponent(req.params.phone);
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
     const { agentId, agentName } = req.body;
     
+    console.log(`🔄 Takeover request: ${phone} by ${agentName}`);
     const success = await setConversationMode(phone, 'agent', agentId, agentName);
+    
+    if (success) {
+      console.log(`✅ Takeover successful for ${phone}`);
+    } else {
+      console.log(`❌ Takeover failed for ${phone}`);
+    }
+    
     res.json({ success });
   } catch (error) {
     console.error('Takeover error:', error);
@@ -700,9 +734,17 @@ app.post('/api/conversations/:phone/takeover', async (req, res) => {
 // Release conversation to AI
 app.post('/api/conversations/:phone/release', async (req, res) => {
   try {
-    const phone = decodeURIComponent(req.params.phone);
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
     
+    console.log(`🔄 Release request: ${phone} back to AI`);
     const success = await setConversationMode(phone, 'ai', null, null);
+    
+    if (success) {
+      console.log(`✅ Released ${phone} to AI`);
+    } else {
+      console.log(`❌ Release failed for ${phone}`);
+    }
+    
     res.json({ success });
   } catch (error) {
     console.error('Release error:', error);
@@ -713,8 +755,10 @@ app.post('/api/conversations/:phone/release', async (req, res) => {
 // Send message as agent
 app.post('/api/conversations/:phone/send', async (req, res) => {
   try {
-    const phone = decodeURIComponent(req.params.phone);
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
     const { message, agentId, agentName } = req.body;
+    
+    console.log(`📤 Agent ${agentName} sending message to ${phone}`);
     
     // Send WhatsApp message
     await sendWhatsAppMessage(phone, message);
@@ -722,6 +766,7 @@ app.post('/api/conversations/:phone/send', async (req, res) => {
     // Save to database
     await saveConversation(phone, '', message, 'agent');
     
+    console.log(`✅ Message sent successfully`);
     res.json({ success: true });
   } catch (error) {
     console.error('Send message error:', error);
