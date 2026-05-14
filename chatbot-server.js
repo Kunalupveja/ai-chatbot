@@ -3,6 +3,8 @@ const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
+const bcrypt = require('bcryptjs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,6 +12,9 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static files (for agent dashboard)
+app.use(express.static('public'));
 
 // Initialize Supabase
 const supabase = createClient(
@@ -245,7 +250,7 @@ async function saveLead(leadInfo) {
   }
 }
 
-async function saveConversation(phoneNumber, userMessage, aiResponse) {
+async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = 'ai') {
   try {
     const { error } = await supabase
       .from('conversations')
@@ -253,6 +258,7 @@ async function saveConversation(phoneNumber, userMessage, aiResponse) {
         phone_number: phoneNumber,
         user_message: userMessage,
         ai_response: aiResponse,
+        sent_by: sentBy,
         created_at: new Date().toISOString()
       }]);
 
@@ -316,6 +322,126 @@ async function getStats() {
   } catch (error) {
     console.error('❌ Error fetching stats:', error.message);
     return { totalLeads: 0, activeConversations: 0 };
+  }
+}
+
+// ============================================
+// AGENT DASHBOARD FUNCTIONS
+// ============================================
+
+async function getConversationMode(phoneNumber) {
+  try {
+    const { data, error } = await supabase
+      .from('conversation_modes')
+      .select('*')
+      .eq('phone_number', phoneNumber)
+      .single();
+
+    if (error && error.code !== 'PGRST116') throw error;
+    return data || { mode: 'ai', agent_id: null, agent_name: null };
+  } catch (error) {
+    console.error('❌ Error getting mode:', error.message);
+    return { mode: 'ai', agent_id: null, agent_name: null };
+  }
+}
+
+async function setConversationMode(phoneNumber, mode, agentId = null, agentName = null) {
+  try {
+    const { error } = await supabase
+      .from('conversation_modes')
+      .upsert({
+        phone_number: phoneNumber,
+        mode: mode,
+        agent_id: agentId,
+        agent_name: agentName,
+        taken_over_at: mode === 'agent' ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString()
+      });
+
+    if (error) throw error;
+    console.log(`✅ Mode set to ${mode} for ${phoneNumber}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error setting mode:', error.message);
+    return false;
+  }
+}
+
+async function authenticateAgent(username, password) {
+  try {
+    const { data, error } = await supabase
+      .from('agents')
+      .select('*')
+      .eq('username', username)
+      .eq('active', true)
+      .single();
+
+    if (error) return null;
+    
+    // For demo, accept any password (in production, use bcrypt.compare)
+    // const isValid = await bcrypt.compare(password, data.password_hash);
+    const isValid = password === 'password123'; // Demo only
+    
+    if (isValid) {
+      return {
+        id: data.id,
+        username: data.username,
+        name: data.name,
+        email: data.email
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ Auth error:', error.message);
+    return null;
+  }
+}
+
+async function getAllConversationsForDashboard() {
+  try {
+    // Get all leads with their latest conversation
+    const { data: leads, error: leadsError } = await supabase
+      .from('leads')
+      .select('*')
+      .order('received_at', { ascending: false })
+      .limit(100);
+
+    if (leadsError) throw leadsError;
+
+    const conversations = [];
+
+    for (const lead of leads) {
+      // Get latest message
+      const { data: messages } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('phone_number', lead.phone)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      // Get conversation mode
+      const mode = await getConversationMode(lead.phone);
+
+      if (messages && messages.length > 0) {
+        conversations.push({
+          phone: lead.phone,
+          name: lead.name,
+          email: lead.email,
+          industry: lead.industry,
+          mode: mode.mode,
+          agentId: mode.agent_id,
+          agentName: mode.agent_name,
+          lastMessage: messages[0].created_at,
+          preview: messages[0].user_message || messages[0].ai_response
+        });
+      }
+    }
+
+    return conversations;
+  } catch (error) {
+    console.error('❌ Error getting conversations:', error.message);
+    return [];
   }
 }
 
@@ -467,8 +593,18 @@ app.post('/webhook/whatsapp', async (req, res) => {
                 
                 console.log(`From: ${from}`);
                 
-                const aiResponse = await generateAIResponse(from, text);
-                await sendWhatsAppMessage(from, aiResponse);
+                // Check conversation mode
+                const mode = await getConversationMode(from);
+                
+                if (mode.mode === 'agent') {
+                  // Agent mode - just save message, don't respond
+                  console.log(`⚠️  Agent mode - message saved for agent ${mode.agent_name}`);
+                  await saveConversation(from, text, '', 'user');
+                } else {
+                  // AI mode - generate and send response
+                  const aiResponse = await generateAIResponse(from, text);
+                  await sendWhatsAppMessage(from, aiResponse);
+                }
               }
             }
           }
@@ -480,6 +616,122 @@ app.post('/webhook/whatsapp', async (req, res) => {
     console.error('❌ Error:', error);
     res.sendStatus(500);
   }
+});
+
+// ============================================
+// AGENT DASHBOARD API ENDPOINTS
+// ============================================
+
+// Agent login
+app.post('/api/agent/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const agent = await authenticateAgent(username, password);
+    
+    if (agent) {
+      res.json({ success: true, agent });
+    } else {
+      res.json({ success: false, message: 'Invalid credentials' });
+    }
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Get all conversations
+app.get('/api/conversations', async (req, res) => {
+  try {
+    const conversations = await getAllConversationsForDashboard();
+    res.json({ success: true, conversations });
+  } catch (error) {
+    console.error('Get conversations error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Get messages for a conversation
+app.get('/api/conversations/:phone/messages', async (req, res) => {
+  try {
+    const phone = decodeURIComponent(req.params.phone);
+    const { data: messages, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('phone_number', phone)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    // Get lead info
+    const { data: lead } = await supabase
+      .from('leads')
+      .select('name')
+      .eq('phone', phone)
+      .single();
+
+    const formattedMessages = messages.map(msg => ({
+      type: msg.sent_by || 'ai',
+      text: msg.sent_by === 'user' ? msg.user_message : msg.ai_response,
+      timestamp: msg.created_at,
+      name: lead?.name || 'Customer'
+    }));
+
+    res.json({ success: true, messages: formattedMessages });
+  } catch (error) {
+    console.error('Get messages error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Take over conversation
+app.post('/api/conversations/:phone/takeover', async (req, res) => {
+  try {
+    const phone = decodeURIComponent(req.params.phone);
+    const { agentId, agentName } = req.body;
+    
+    const success = await setConversationMode(phone, 'agent', agentId, agentName);
+    res.json({ success });
+  } catch (error) {
+    console.error('Takeover error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Release conversation to AI
+app.post('/api/conversations/:phone/release', async (req, res) => {
+  try {
+    const phone = decodeURIComponent(req.params.phone);
+    
+    const success = await setConversationMode(phone, 'ai', null, null);
+    res.json({ success });
+  } catch (error) {
+    console.error('Release error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Send message as agent
+app.post('/api/conversations/:phone/send', async (req, res) => {
+  try {
+    const phone = decodeURIComponent(req.params.phone);
+    const { message, agentId, agentName } = req.body;
+    
+    // Send WhatsApp message
+    await sendWhatsAppMessage(phone, message);
+    
+    // Save to database
+    await saveConversation(phone, '', message, 'agent');
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Send message error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Serve agent dashboard
+app.get('/agent-dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'agent-dashboard.html'));
 });
 
 // Dashboard
