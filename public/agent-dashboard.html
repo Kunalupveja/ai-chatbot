@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nords Agent Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Login Screen */
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .login-box {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            width: 400px;
+        }
+
+        .login-box h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .login-box p {
+            color: #6b7280;
+            margin-bottom: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #374151;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn-login {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-login:hover {
+            opacity: 0.9;
+        }
+
+        /* Dashboard Layout */
+        .dashboard {
+            display: none;
+            height: 100vh;
+            flex-direction: column;
+        }
+
+        .dashboard.active {
+            display: flex;
+        }
+
+        /* Header */
+        .header {
+            background: white;
+            padding: 15px 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 24px;
+        }
+
+        .agent-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .agent-name {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .btn-logout {
+            padding: 8px 16px;
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        /* Main Content */
+        .main-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Conversations List */
+        .conversations-panel {
+            width: 350px;
+            background: white;
+            border-right: 1px solid #e5e7eb;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-header {
+            padding: 20px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .panel-header h2 {
+            color: #374151;
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .conversations-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .conversation-item {
+            padding: 15px 20px;
+            border-bottom: 1px solid #e5e7eb;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .conversation-item:hover {
+            background: #f9fafb;
+        }
+
+        .conversation-item.active {
+            background: #ede9fe;
+            border-left: 4px solid #667eea;
+        }
+
+        .conversation-item.ai-mode {
+            border-left: 4px solid #10b981;
+        }
+
+        .conversation-item.agent-mode {
+            border-left: 4px solid #f59e0b;
+        }
+
+        .conv-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .conv-name {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .conv-time {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+
+        .conv-preview {
+            font-size: 14px;
+            color: #6b7280;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .mode-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-top: 5px;
+        }
+
+        .mode-badge.ai {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .mode-badge.agent {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        /* Chat Panel */
+        .chat-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #f9fafb;
+        }
+
+        .chat-header {
+            background: white;
+            padding: 20px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chat-info h3 {
+            color: #374151;
+            margin-bottom: 5px;
+        }
+
+        .chat-meta {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .chat-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-takeover {
+            padding: 10px 20px;
+            background: #f59e0b;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .btn-release {
+            padding: 10px 20px;
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        /* Messages */
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .message.user .message-avatar {
+            background: #667eea;
+        }
+
+        .message.ai .message-avatar {
+            background: #10b981;
+        }
+
+        .message.agent .message-avatar {
+            background: #f59e0b;
+        }
+
+        .message-content {
+            max-width: 70%;
+        }
+
+        .message.user .message-content {
+            text-align: right;
+        }
+
+        .message-bubble {
+            padding: 12px 16px;
+            border-radius: 12px;
+            display: inline-block;
+            text-align: left;
+        }
+
+        .message.user .message-bubble {
+            background: #667eea;
+            color: white;
+        }
+
+        .message.ai .message-bubble {
+            background: white;
+            color: #374151;
+        }
+
+        .message.agent .message-bubble {
+            background: #fef3c7;
+            color: #374151;
+        }
+
+        .message-time {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-top: 5px;
+        }
+
+        /* Message Input */
+        .message-input-container {
+            background: white;
+            padding: 20px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .message-input-box {
+            display: flex;
+            gap: 10px;
+        }
+
+        .message-input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            resize: none;
+            font-family: inherit;
+        }
+
+        .message-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn-send {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .btn-send:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #9ca3af;
+        }
+
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        /* Stats */
+        .stats-bar {
+            display: flex;
+            gap: 20px;
+            padding: 15px 20px;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .stat-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .stat-dot.ai {
+            background: #10b981;
+        }
+
+        .stat-dot.agent {
+            background: #f59e0b;
+        }
+    </style>
+</head>
+<body>
+    <!-- Login Screen -->
+    <div class="login-container" id="loginScreen">
+        <div class="login-box">
+            <h1>🤖 Agent Dashboard</h1>
+            <p>Nords Weight Loss Clinic</p>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="username" placeholder="Enter your username" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="password" placeholder="Enter your password" required>
+                </div>
+                <button type="submit" class="btn-login">Login</button>
+            </form>
+            <p style="margin-top: 20px; font-size: 12px; color: #9ca3af;">
+                Demo: agent1 / password123
+            </p>
+        </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div class="dashboard" id="dashboard">
+        <!-- Header -->
+        <div class="header">
+            <h1>🤖 Agent Dashboard</h1>
+            <div class="agent-info">
+                <span class="agent-name" id="agentName">Agent</span>
+                <button class="btn-logout" onclick="logout()">Logout</button>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Conversations Panel -->
+            <div class="conversations-panel">
+                <div class="panel-header">
+                    <h2>Conversations</h2>
+                    <input type="text" class="search-box" placeholder="Search conversations..." id="searchBox">
+                </div>
+                <div class="stats-bar">
+                    <div class="stat-item">
+                        <span class="stat-dot ai"></span>
+                        <span class="stat-label">AI Mode:</span>
+                        <span class="stat-value" id="aiCount">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-dot agent"></span>
+                        <span class="stat-label">Agent Mode:</span>
+                        <span class="stat-value" id="agentCount">0</span>
+                    </div>
+                </div>
+                <div class="conversations-list" id="conversationsList">
+                    <!-- Conversations will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Chat Panel -->
+            <div class="chat-panel">
+                <div id="emptyState" class="empty-state">
+                    <div class="empty-state-icon">💬</div>
+                    <h3>Select a conversation</h3>
+                    <p>Choose a conversation from the list to start chatting</p>
+                </div>
+
+                <div id="chatContent" style="display: none; flex: 1; display: flex; flex-direction: column;">
+                    <div class="chat-header">
+                        <div class="chat-info">
+                            <h3 id="chatName">Customer Name</h3>
+                            <div class="chat-meta">
+                                <span id="chatPhone">+254712345678</span> • 
+                                <span id="chatEmail">email@example.com</span>
+                            </div>
+                        </div>
+                        <div class="chat-actions">
+                            <button class="btn-takeover" id="btnTakeover" onclick="takeoverConversation()">
+                                👤 Take Over
+                            </button>
+                            <button class="btn-release" id="btnRelease" onclick="releaseConversation()" style="display: none;">
+                                🤖 Release to AI
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="messages-container" id="messagesContainer">
+                        <!-- Messages will be loaded here -->
+                    </div>
+
+                    <div class="message-input-container">
+                        <div class="message-input-box">
+                            <textarea 
+                                class="message-input" 
+                                id="messageInput" 
+                                placeholder="Type your message..." 
+                                rows="2"
+                                disabled
+                            ></textarea>
+                            <button class="btn-send" id="btnSend" onclick="sendMessage()" disabled>
+                                Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentAgent = null;
+        let currentConversation = null;
+        let conversations = [];
+        let refreshInterval = null;
+
+        // Login
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('/api/agent/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentAgent = data.agent;
+                    document.getElementById('agentName').textContent = currentAgent.name;
+                    document.getElementById('loginScreen').style.display = 'none';
+                    document.getElementById('dashboard').classList.add('active');
+                    loadConversations();
+                    startAutoRefresh();
+                } else {
+                    alert('Invalid credentials');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('Login failed');
+            }
+        });
+
+        // Logout
+        function logout() {
+            currentAgent = null;
+            currentConversation = null;
+            stopAutoRefresh();
+            document.getElementById('dashboard').classList.remove('active');
+            document.getElementById('loginScreen').style.display = 'flex';
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+        }
+
+        // Load conversations
+        async function loadConversations() {
+            try {
+                const response = await fetch('/api/conversations');
+                const data = await response.json();
+                conversations = data.conversations;
+                renderConversations();
+                updateStats();
+            } catch (error) {
+                console.error('Error loading conversations:', error);
+            }
+        }
+
+        // Render conversations list
+        function renderConversations() {
+            const list = document.getElementById('conversationsList');
+            list.innerHTML = '';
+
+            conversations.forEach(conv => {
+                const item = document.createElement('div');
+                item.className = `conversation-item ${conv.mode === 'ai' ? 'ai-mode' : 'agent-mode'}`;
+                if (currentConversation && currentConversation.phone === conv.phone) {
+                    item.className += ' active';
+                }
+
+                item.innerHTML = `
+                    <div class="conv-header">
+                        <span class="conv-name">${conv.name}</span>
+                        <span class="conv-time">${formatTime(conv.lastMessage)}</span>
+                    </div>
+                    <div class="conv-preview">${conv.preview}</div>
+                    <span class="mode-badge ${conv.mode}">${conv.mode === 'ai' ? '🤖 AI' : '👤 ' + conv.agentName}</span>
+                `;
+
+                item.onclick = () => selectConversation(conv);
+                list.appendChild(item);
+            });
+        }
+
+        // Select conversation
+        async function selectConversation(conv) {
+            currentConversation = conv;
+            renderConversations();
+            await loadMessages(conv.phone);
+            
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('chatContent').style.display = 'flex';
+            
+            document.getElementById('chatName').textContent = conv.name;
+            document.getElementById('chatPhone').textContent = conv.phone;
+            document.getElementById('chatEmail').textContent = conv.email || 'N/A';
+
+            updateChatControls();
+        }
+
+        // Load messages
+        async function loadMessages(phone) {
+            try {
+                const response = await fetch(`/api/conversations/${encodeURIComponent(phone)}/messages`);
+                const data = await response.json();
+                renderMessages(data.messages);
+            } catch (error) {
+                console.error('Error loading messages:', error);
+            }
+        }
+
+        // Render messages
+        function renderMessages(messages) {
+            const container = document.getElementById('messagesContainer');
+            container.innerHTML = '';
+
+            messages.forEach(msg => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${msg.type}`;
+                
+                const avatar = msg.type === 'user' ? msg.name.charAt(0).toUpperCase() : 
+                              msg.type === 'ai' ? '🤖' : '👤';
+
+                messageDiv.innerHTML = `
+                    <div class="message-avatar">${avatar}</div>
+                    <div class="message-content">
+                        <div class="message-bubble">${msg.text}</div>
+                        <div class="message-time">${formatTime(msg.timestamp)}</div>
+                    </div>
+                `;
+
+                container.appendChild(messageDiv);
+            });
+
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Update chat controls
+        function updateChatControls() {
+            const isAgentMode = currentConversation.mode === 'agent' && 
+                               currentConversation.agentId === currentAgent.id;
+            const isAIMode = currentConversation.mode === 'ai';
+
+            document.getElementById('btnTakeover').style.display = isAIMode ? 'block' : 'none';
+            document.getElementById('btnRelease').style.display = isAgentMode ? 'block' : 'none';
+            document.getElementById('messageInput').disabled = !isAgentMode;
+            document.getElementById('btnSend').disabled = !isAgentMode;
+        }
+
+        // Takeover conversation
+        async function takeoverConversation() {
+            try {
+                const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/takeover`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ agentId: currentAgent.id, agentName: currentAgent.name })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    currentConversation.mode = 'agent';
+                    currentConversation.agentId = currentAgent.id;
+                    currentConversation.agentName = currentAgent.name;
+                    updateChatControls();
+                    loadConversations();
+                }
+            } catch (error) {
+                console.error('Error taking over:', error);
+            }
+        }
+
+        // Release conversation
+        async function releaseConversation() {
+            try {
+                const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/release`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    currentConversation.mode = 'ai';
+                    currentConversation.agentId = null;
+                    currentConversation.agentName = null;
+                    updateChatControls();
+                    loadConversations();
+                }
+            } catch (error) {
+                console.error('Error releasing:', error);
+            }
+        }
+
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+
+            try {
+                const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/send`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        message,
+                        agentId: currentAgent.id,
+                        agentName: currentAgent.name
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    input.value = '';
+                    await loadMessages(currentConversation.phone);
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+            }
+        }
+
+        // Update stats
+        function updateStats() {
+            const aiCount = conversations.filter(c => c.mode === 'ai').length;
+            const agentCount = conversations.filter(c => c.mode === 'agent').length;
+            
+            document.getElementById('aiCount').textContent = aiCount;
+            document.getElementById('agentCount').textContent = agentCount;
+        }
+
+        // Auto refresh
+        function startAutoRefresh() {
+            refreshInterval = setInterval(() => {
+                loadConversations();
+                if (currentConversation) {
+                    loadMessages(currentConversation.phone);
+                }
+            }, 5000); // Refresh every 5 seconds
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        }
+
+        // Format time
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+            
+            if (diff < 60000) return 'Just now';
+            if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+            if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+            return date.toLocaleDateString();
+        }
+
+        // Enter to send
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('messageInput').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+        });
+    </script>
+</body>
+</html>
