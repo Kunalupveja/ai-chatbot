@@ -412,6 +412,12 @@ async function getAllConversationsForDashboard() {
     const conversations = [];
 
     for (const lead of leads) {
+      // Skip leads that are blocked in test mode
+      if (lead.industry && lead.industry.includes('WhatsApp Blocked')) {
+        console.log(`⚠️  Skipping blocked lead: ${lead.name} (${lead.phone})`);
+        continue;
+      }
+      
       // Get latest message
       const { data: messages } = await supabase
         .from('conversations')
@@ -420,10 +426,11 @@ async function getAllConversationsForDashboard() {
         .order('created_at', { ascending: false })
         .limit(1);
 
-      // Get conversation mode
-      const mode = await getConversationMode(lead.phone);
-
+      // Only show in dashboard if there's at least one conversation
       if (messages && messages.length > 0) {
+        // Get conversation mode
+        const mode = await getConversationMode(lead.phone);
+
         conversations.push({
           phone: lead.phone,
           name: lead.name,
@@ -486,10 +493,21 @@ async function sendWhatsAppMessage(to, message) {
     });
 
     console.log('✅ WhatsApp sent');
-    return response.data;
+    return { success: true, data: response.data };
   } catch (error) {
     console.error('❌ WhatsApp error:', error.response?.data || error.message);
-    throw error;
+    
+    // Check if it's a recipient error (not in test recipients)
+    const errorMessage = error.response?.data?.error?.message || '';
+    const isRecipientError = errorMessage.includes('recipient') || 
+                            errorMessage.includes('not a valid') ||
+                            error.response?.data?.error?.code === 131026;
+    
+    return { 
+      success: false, 
+      error: error.response?.data || error.message,
+      isRecipientError 
+    };
   }
 }
 
@@ -544,14 +562,14 @@ app.post('/webhook/zoho-lead', async (req, res) => {
   try {
     const leadInfo = extractLeadInfo({ ...req.body, ...req.query });
     
-    // Save to database
-    await saveLead(leadInfo);
-    
     console.log('✅ Lead processed:', leadInfo.name);
 
     if (!leadInfo.phone) {
       return res.status(400).json({ success: false, error: 'Phone required' });
     }
+
+    // Save to database first
+    const savedLead = await saveLead(leadInfo);
 
     console.log('🤖 Generating message...');
     const welcomeMessage = await generateAIResponse(
@@ -561,9 +579,39 @@ app.post('/webhook/zoho-lead', async (req, res) => {
     );
 
     console.log('📱 Sending WhatsApp...');
-    await sendWhatsAppMessage(leadInfo.phone, welcomeMessage);
+    const whatsappResult = await sendWhatsAppMessage(leadInfo.phone, welcomeMessage);
 
-    res.json({ success: true, message: 'Lead processed' });
+    if (!whatsappResult.success) {
+      if (whatsappResult.isRecipientError) {
+        console.log('⚠️  WhatsApp Test Mode: Phone not in test recipients');
+        console.log('⚠️  Lead saved but message not sent (test mode restriction)');
+        
+        // Mark this lead as "test mode blocked" in database
+        await supabase
+          .from('leads')
+          .update({ 
+            lead_source: `${leadInfo.leadSource} (Test Mode - Not Sent)`,
+            industry: `${leadInfo.industry} - WhatsApp Blocked`
+          })
+          .eq('phone', leadInfo.phone);
+        
+        return res.json({ 
+          success: true, 
+          message: 'Lead saved but WhatsApp blocked (test mode)',
+          warning: 'Phone not in Meta test recipients'
+        });
+      } else {
+        // Other WhatsApp error
+        console.error('❌ WhatsApp send failed:', whatsappResult.error);
+        return res.status(500).json({ 
+          success: false, 
+          error: 'WhatsApp send failed',
+          details: whatsappResult.error
+        });
+      }
+    }
+
+    res.json({ success: true, message: 'Lead processed and message sent' });
 
   } catch (error) {
     console.error('❌ Error:', error);
