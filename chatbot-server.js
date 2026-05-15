@@ -250,7 +250,7 @@ async function saveLead(leadInfo) {
   }
 }
 
-async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = 'ai') {
+async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = 'ai', agentName = null) {
   try {
     const { error } = await supabase
       .from('conversations')
@@ -259,6 +259,7 @@ async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = '
         user_message: userMessage,
         ai_response: aiResponse,
         sent_by: sentBy,
+        agent_name: agentName,
         created_at: new Date().toISOString()
       }]);
 
@@ -735,7 +736,8 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           type: 'user',
           text: msg.user_message,
           timestamp: msg.created_at,
-          name: lead?.name || 'Customer'
+          name: lead?.name || 'Customer',
+          agentName: null
         });
       }
       
@@ -745,7 +747,8 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           type: msg.sent_by || 'ai',
           text: msg.ai_response,
           timestamp: msg.created_at,
-          name: lead?.name || 'Customer'
+          name: lead?.name || 'Customer',
+          agentName: msg.agent_name || null
         });
       }
     });
@@ -811,8 +814,8 @@ app.post('/api/conversations/:phone/send', async (req, res) => {
     // Send WhatsApp message
     await sendWhatsAppMessage(phone, message);
     
-    // Save to database
-    await saveConversation(phone, '', message, 'agent');
+    // Save to database with agent name
+    await saveConversation(phone, '', message, 'agent', agentName);
     
     console.log(`✅ Message sent successfully`);
     res.json({ success: true });
