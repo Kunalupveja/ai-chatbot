@@ -1009,9 +1009,9 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           name: lead?.name || 'Customer',
           agentName: null,
           status: null, // User messages don't have status
-          // Media data
+          // Media data - use proxy URL for authenticated access
           mediaType: msg.media_type,
-          mediaUrl: msg.media_url,
+          mediaUrl: msg.media_id ? `/api/media/${msg.media_id}` : null,
           mediaId: msg.media_id,
           mediaMimeType: msg.media_mime_type,
           mediaFilename: msg.media_filename,
@@ -1171,6 +1171,37 @@ app.post('/api/conversations/:phone/send', async (req, res) => {
   } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Proxy media endpoint (to handle WhatsApp authentication)
+app.get('/api/media/:mediaId', async (req, res) => {
+  try {
+    const mediaId = req.params.mediaId;
+    
+    // Get media URL from WhatsApp
+    const mediaUrl = await getMediaUrl(mediaId);
+    
+    if (!mediaUrl) {
+      return res.status(404).send('Media not found');
+    }
+    
+    // Fetch media with authentication
+    const response = await axios.get(mediaUrl, {
+      headers: {
+        'Authorization': `Bearer ${process.env.META_ACCESS_TOKEN}`
+      },
+      responseType: 'arraybuffer'
+    });
+    
+    // Forward the media to client
+    res.set('Content-Type', response.headers['content-type']);
+    res.set('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+    res.send(response.data);
+    
+  } catch (error) {
+    console.error('Media proxy error:', error.message);
+    res.status(500).send('Failed to load media');
   }
 });
 
