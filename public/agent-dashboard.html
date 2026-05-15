@@ -735,18 +735,48 @@
 
         // Update chat controls
         function updateChatControls() {
+            if (!currentConversation || !currentAgent) {
+                // No conversation selected or not logged in
+                document.getElementById('btnTakeover').style.display = 'none';
+                document.getElementById('btnRelease').style.display = 'none';
+                document.getElementById('messageInput').disabled = true;
+                document.getElementById('btnSend').disabled = true;
+                return;
+            }
+
             const isAgentMode = currentConversation.mode === 'agent' && 
                                currentConversation.agentId === currentAgent.id;
             const isAIMode = currentConversation.mode === 'ai';
+            const isOtherAgentMode = currentConversation.mode === 'agent' && 
+                                    currentConversation.agentId !== currentAgent.id;
 
             document.getElementById('btnTakeover').style.display = isAIMode ? 'block' : 'none';
             document.getElementById('btnRelease').style.display = isAgentMode ? 'block' : 'none';
             document.getElementById('messageInput').disabled = !isAgentMode;
             document.getElementById('btnSend').disabled = !isAgentMode;
+            
+            // Show info if another agent has taken over
+            if (isOtherAgentMode) {
+                document.getElementById('messageInput').placeholder = `${currentConversation.agentName} is handling this conversation...`;
+            } else if (isAgentMode) {
+                document.getElementById('messageInput').placeholder = 'Type your message...';
+            } else {
+                document.getElementById('messageInput').placeholder = 'Take over to send messages...';
+            }
         }
 
         // Takeover conversation
         async function takeoverConversation() {
+            if (!currentConversation) {
+                alert('Please select a conversation first');
+                return;
+            }
+
+            if (!currentAgent) {
+                alert('Please login first');
+                return;
+            }
+
             try {
                 const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/takeover`, {
                     method: 'POST',
@@ -761,14 +791,22 @@
                     currentConversation.agentName = currentAgent.name;
                     updateChatControls();
                     loadConversations();
+                } else {
+                    alert('Failed to take over conversation');
                 }
             } catch (error) {
                 console.error('Error taking over:', error);
+                alert('Failed to take over conversation. Please try again.');
             }
         }
 
         // Release conversation
         async function releaseConversation() {
+            if (!currentConversation) {
+                alert('Please select a conversation first');
+                return;
+            }
+
             try {
                 const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/release`, {
                     method: 'POST'
@@ -781,18 +819,41 @@
                     currentConversation.agentName = null;
                     updateChatControls();
                     loadConversations();
+                } else {
+                    alert('Failed to release conversation');
                 }
             } catch (error) {
                 console.error('Error releasing:', error);
+                alert('Failed to release conversation. Please try again.');
             }
         }
 
         // Send message
         async function sendMessage() {
+            // Check if conversation is selected
+            if (!currentConversation) {
+                console.error('No conversation selected');
+                alert('Please select a conversation first');
+                return;
+            }
+
+            // Check if agent is logged in
+            if (!currentAgent) {
+                console.error('No agent logged in');
+                alert('Please login first');
+                return;
+            }
+
             const input = document.getElementById('messageInput');
             const message = input.value.trim();
             
             if (!message) return;
+
+            // Check if this agent has taken over
+            if (currentConversation.mode !== 'agent' || currentConversation.agentId !== currentAgent.id) {
+                alert('You need to take over this conversation first');
+                return;
+            }
 
             try {
                 const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/send`, {
@@ -809,9 +870,12 @@
                 if (data.success) {
                     input.value = '';
                     await loadMessages(currentConversation.phone);
+                } else {
+                    alert('Failed to send message: ' + (data.message || 'Unknown error'));
                 }
             } catch (error) {
                 console.error('Error sending message:', error);
+                alert('Failed to send message. Please try again.');
             }
         }
 
@@ -826,10 +890,22 @@
 
         // Auto refresh
         function startAutoRefresh() {
-            refreshInterval = setInterval(() => {
-                loadConversations();
+            refreshInterval = setInterval(async () => {
+                await loadConversations();
+                
+                // Update current conversation state if it exists
                 if (currentConversation) {
-                    loadMessages(currentConversation.phone);
+                    const updatedConv = conversations.find(c => c.phone === currentConversation.phone);
+                    if (updatedConv) {
+                        // Update mode and agent info
+                        currentConversation.mode = updatedConv.mode;
+                        currentConversation.agentId = updatedConv.agentId;
+                        currentConversation.agentName = updatedConv.agentName;
+                        updateChatControls();
+                    }
+                    
+                    // Reload messages
+                    await loadMessages(currentConversation.phone);
                 }
             }, 5000); // Refresh every 5 seconds
         }
