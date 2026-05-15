@@ -1239,13 +1239,19 @@
                 return;
             }
 
+            // Save agent info before closing modal (which clears selectedAgentForAssign)
+            const targetAgent = {
+                id: selectedAgentForAssign.id,
+                name: selectedAgentForAssign.name
+            };
+
             try {
                 const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/assign`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        targetAgentId: selectedAgentForAssign.id,
-                        targetAgentName: selectedAgentForAssign.name,
+                        targetAgentId: targetAgent.id,
+                        targetAgentName: targetAgent.name,
                         fromAgentName: currentAgent.name
                     })
                 });
@@ -1254,8 +1260,8 @@
                 if (data.success) {
                     // Update current conversation state
                     currentConversation.mode = 'agent';
-                    currentConversation.agentId = selectedAgentForAssign.id;
-                    currentConversation.agentName = selectedAgentForAssign.name;
+                    currentConversation.agentId = targetAgent.id;
+                    currentConversation.agentName = targetAgent.name;
                     
                     // Close modal
                     closeAssignModal();
@@ -1265,7 +1271,8 @@
                     loadConversations();
                     await loadMessages(currentConversation.phone);
                     
-                    alert(`Conversation assigned to ${selectedAgentForAssign.name}`);
+                    // Show success message using saved agent info
+                    alert(`Conversation assigned to ${targetAgent.name}`);
                 } else {
                     alert('Failed to assign conversation');
                 }
