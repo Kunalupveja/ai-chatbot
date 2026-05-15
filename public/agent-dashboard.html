@@ -642,6 +642,121 @@
         .stat-dot.agent {
             background: #f59e0b;
         }
+
+        /* Media Container Styles */
+        .media-container {
+            margin: 10px 0;
+            max-width: 100%;
+        }
+
+        .media-image {
+            margin: 8px 0;
+        }
+
+        .media-image img {
+            display: block;
+            max-width: 300px;
+            max-height: 300px;
+            width: auto;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .media-image img:hover {
+            transform: scale(1.02);
+        }
+
+        .media-video {
+            margin: 8px 0;
+        }
+
+        .media-video video {
+            display: block;
+            max-width: 300px;
+            max-height: 300px;
+            width: auto;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .media-document {
+            padding: 12px 16px;
+            background: #f3f4f6;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            margin: 8px 0;
+            max-width: 300px;
+        }
+
+        .document-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .document-link:hover {
+            text-decoration: underline;
+            color: #5568d3;
+        }
+
+        .media-audio {
+            margin: 8px 0;
+        }
+
+        .media-audio audio {
+            display: block;
+            max-width: 300px;
+            height: 40px;
+        }
+
+        .media-sticker {
+            margin: 8px 0;
+        }
+
+        .media-sticker img {
+            display: block;
+            max-width: 150px;
+            max-height: 150px;
+            width: auto;
+            height: auto;
+        }
+
+        .media-caption {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #6b7280;
+            font-style: italic;
+            line-height: 1.4;
+        }
+
+        .media-info {
+            font-size: 11px;
+            color: #9ca3af;
+            margin-top: 4px;
+        }
+
+        /* User messages with media */
+        .message.user .media-container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        /* AI/Agent messages with media */
+        .message.ai .media-container,
+        .message.agent .media-container {
+            background: rgba(0, 0, 0, 0.02);
+            padding: 8px;
+            border-radius: 8px;
+        }
     </style>
 </head>
 <body>
@@ -923,6 +1038,14 @@
                 const agentLabel = msg.type === 'agent' && msg.agentName ? 
                     `<div class="agent-name-label">👤 ${msg.agentName}</div>` : '';
 
+                // Build media content if present
+                const mediaContent = msg.mediaType ? renderMedia(msg) : '';
+
+                // Build text content (skip placeholder text for media-only messages)
+                const placeholderTexts = ['[Image]', '[Video]', '[Document]', '[Audio]', '[Voice Message]', '[Sticker]'];
+                const textContent = msg.text && !placeholderTexts.includes(msg.text) ? 
+                    `<div class="message-bubble">${escapeHtml(msg.text)}</div>` : '';
+
                 // Build status indicator for outgoing messages (AI/agent)
                 let statusIndicator = '';
                 if (msg.type === 'ai' || msg.type === 'agent') {
@@ -956,7 +1079,8 @@
                     <div class="message-avatar">${avatar}</div>
                     <div class="message-content">
                         ${agentLabel}
-                        <div class="message-bubble">${msg.text}</div>
+                        ${mediaContent}
+                        ${textContent}
                         <div class="message-time">${formatTime(msg.timestamp)}</div>
                         ${statusIndicator}
                     </div>
@@ -966,6 +1090,112 @@
             });
 
             container.scrollTop = container.scrollHeight;
+        }
+
+        // Render media
+        function renderMedia(msg) {
+            const mediaType = msg.mediaType;
+            const mediaUrl = msg.mediaUrl;
+            const caption = msg.mediaCaption;
+            const filename = msg.mediaFilename;
+            const size = msg.mediaSize;
+            
+            if (!mediaType || !mediaUrl) return '';
+            
+            let html = '<div class="media-container">';
+            
+            if (mediaType === 'image') {
+                html += `
+                    <div class="media-image">
+                        <img src="${mediaUrl}" 
+                             alt="Image" 
+                             onclick="window.open('${mediaUrl}', '_blank')" 
+                             onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22300%22 height=%22200%22><rect fill=%22%23f3f4f6%22 width=%22300%22 height=%22200%22/><text x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%239ca3af%22>Image unavailable</text></svg>'">
+                    </div>
+                `;
+                if (caption) {
+                    html += `<div class="media-caption">${escapeHtml(caption)}</div>`;
+                }
+                if (size) {
+                    html += `<div class="media-info">📸 ${formatFileSize(size)}</div>`;
+                }
+                
+            } else if (mediaType === 'video') {
+                html += `
+                    <div class="media-video">
+                        <video controls preload="metadata">
+                            <source src="${mediaUrl}" type="${msg.mediaMimeType || 'video/mp4'}">
+                            Your browser does not support video playback.
+                        </video>
+                    </div>
+                `;
+                if (caption) {
+                    html += `<div class="media-caption">${escapeHtml(caption)}</div>`;
+                }
+                if (size) {
+                    html += `<div class="media-info">🎥 ${formatFileSize(size)}</div>`;
+                }
+                
+            } else if (mediaType === 'document') {
+                html += `
+                    <div class="media-document">
+                        <a href="${mediaUrl}" target="_blank" class="document-link" download="${filename}">
+                            <span>📄</span>
+                            <span>${escapeHtml(filename)}</span>
+                        </a>
+                        ${size ? `<div class="media-info">${formatFileSize(size)}</div>` : ''}
+                    </div>
+                `;
+                if (caption) {
+                    html += `<div class="media-caption">${escapeHtml(caption)}</div>`;
+                }
+                
+            } else if (mediaType === 'audio' || mediaType === 'voice') {
+                html += `
+                    <div class="media-audio">
+                        <audio controls preload="metadata">
+                            <source src="${mediaUrl}" type="${msg.mediaMimeType || 'audio/ogg'}">
+                            Your browser does not support audio playback.
+                        </audio>
+                    </div>
+                `;
+                if (size) {
+                    html += `<div class="media-info">${mediaType === 'voice' ? '🎤' : '🎵'} ${formatFileSize(size)}</div>`;
+                }
+                
+            } else if (mediaType === 'sticker') {
+                html += `
+                    <div class="media-sticker">
+                        <img src="${mediaUrl}" 
+                             alt="Sticker"
+                             onerror="this.style.display='none'">
+                    </div>
+                `;
+            }
+            
+            html += '</div>';
+            return html;
+        }
+
+        // Format file size
+        function formatFileSize(bytes) {
+            if (!bytes || bytes === 0) return '';
+            
+            const kb = bytes / 1024;
+            if (kb < 1024) {
+                return `${Math.round(kb)} KB`;
+            }
+            
+            const mb = kb / 1024;
+            return `${mb.toFixed(1)} MB`;
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         // Update chat controls
