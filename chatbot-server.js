@@ -250,7 +250,7 @@ async function saveLead(leadInfo) {
   }
 }
 
-async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = 'ai', agentName = null) {
+async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = 'ai', agentName = null, whatsappMessageId = null, messageStatus = 'sent') {
   try {
     const { error } = await supabase
       .from('conversations')
@@ -260,6 +260,8 @@ async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = '
         ai_response: aiResponse,
         sent_by: sentBy,
         agent_name: agentName,
+        whatsapp_message_id: whatsappMessageId,
+        message_status: messageStatus,
         created_at: new Date().toISOString()
       }]);
 
@@ -494,7 +496,13 @@ async function sendWhatsAppMessage(to, message) {
     });
 
     console.log('✅ WhatsApp sent');
-    return { success: true, data: response.data };
+    
+    // Return message ID for status tracking
+    return { 
+      success: true, 
+      data: response.data,
+      messageId: response.data.messages?.[0]?.id
+    };
   } catch (error) {
     console.error('❌ WhatsApp error:', error.response?.data || error.message);
     
@@ -539,9 +547,6 @@ async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
     const result = await model.generateContent(fullPrompt);
     const response = await result.response;
     const text = response.text();
-    
-    // Save conversation to database
-    await saveConversation(phoneNumber, userMessage, text);
     
     console.log('✅ AI response generated');
     return text;
@@ -604,6 +609,18 @@ app.post('/webhook/zoho-lead', async (req, res) => {
       } else {
         // Other WhatsApp error
         console.error('❌ WhatsApp send failed:', whatsappResult.error);
+        
+        // Save conversation with failed status
+        await saveConversation(
+          leadInfo.phone,
+          `Hi, I'm ${leadInfo.name}. I'm interested in ${leadInfo.industry || 'weight loss services'}.`,
+          welcomeMessage,
+          'ai',
+          null,
+          null,
+          'failed'
+        );
+        
         return res.status(500).json({ 
           success: false, 
           error: 'WhatsApp send failed',
@@ -611,6 +628,17 @@ app.post('/webhook/zoho-lead', async (req, res) => {
         });
       }
     }
+
+    // Save conversation with message ID
+    await saveConversation(
+      leadInfo.phone,
+      `Hi, I'm ${leadInfo.name}. I'm interested in ${leadInfo.industry || 'weight loss services'}.`,
+      welcomeMessage,
+      'ai',
+      null,
+      whatsappResult.messageId,
+      'sent'
+    );
 
     res.json({ success: true, message: 'Lead processed and message sent' });
 
@@ -640,6 +668,30 @@ app.post('/webhook/whatsapp', async (req, res) => {
     if (req.body.object === 'whatsapp_business_account') {
       for (const entry of req.body.entry) {
         for (const change of entry.changes) {
+          
+          // Handle message status updates (delivered, read)
+          if (change.field === 'messages' && change.value.statuses) {
+            for (const status of change.value.statuses) {
+              const messageId = status.id;
+              const statusType = status.status; // 'sent', 'delivered', 'read', 'failed'
+              
+              console.log(`📊 Status update: ${messageId} → ${statusType}`);
+              
+              // Update message status in database
+              const { error } = await supabase
+                .from('conversations')
+                .update({ message_status: statusType })
+                .eq('whatsapp_message_id', messageId);
+              
+              if (error) {
+                console.error('❌ Error updating status:', error.message);
+              } else {
+                console.log(`✅ Status updated: ${statusType}`);
+              }
+            }
+          }
+          
+          // Handle incoming messages
           if (change.field === 'messages' && change.value.messages) {
             for (const message of change.value.messages) {
               if (message.type === 'text' && message.text?.body) {
@@ -661,7 +713,33 @@ app.post('/webhook/whatsapp', async (req, res) => {
                   // AI mode - generate and send response
                   console.log('🤖 AI mode - generating response');
                   const aiResponse = await generateAIResponse(from, text);
-                  await sendWhatsAppMessage(from, aiResponse);
+                  
+                  // Send WhatsApp message
+                  const whatsappResult = await sendWhatsAppMessage(from, aiResponse);
+                  
+                  // Save conversation with message ID
+                  if (whatsappResult.success) {
+                    await saveConversation(
+                      from, 
+                      text, 
+                      aiResponse, 
+                      'ai', 
+                      null, 
+                      whatsappResult.messageId,
+                      'sent'
+                    );
+                  } else {
+                    // Save with failed status
+                    await saveConversation(
+                      from, 
+                      text, 
+                      aiResponse, 
+                      'ai', 
+                      null, 
+                      null,
+                      'failed'
+                    );
+                  }
                 }
               }
             }
@@ -737,7 +815,8 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           text: msg.user_message,
           timestamp: msg.created_at,
           name: lead?.name || 'Customer',
-          agentName: null
+          agentName: null,
+          status: null // User messages don't have status
         });
       }
       
@@ -748,7 +827,8 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           text: msg.ai_response,
           timestamp: msg.created_at,
           name: lead?.name || 'Customer',
-          agentName: msg.agent_name || null
+          agentName: msg.agent_name || null,
+          status: msg.message_status || 'sent' // Include status for outgoing messages
         });
       }
     });
@@ -812,13 +892,37 @@ app.post('/api/conversations/:phone/send', async (req, res) => {
     console.log(`📤 Agent ${agentName} sending message to ${phone}`);
     
     // Send WhatsApp message
-    await sendWhatsAppMessage(phone, message);
+    const whatsappResult = await sendWhatsAppMessage(phone, message);
     
-    // Save to database with agent name
-    await saveConversation(phone, '', message, 'agent', agentName);
-    
-    console.log(`✅ Message sent successfully`);
-    res.json({ success: true });
+    if (whatsappResult.success) {
+      // Save to database with message ID and agent name
+      await saveConversation(
+        phone, 
+        '', 
+        message, 
+        'agent', 
+        agentName, 
+        whatsappResult.messageId,
+        'sent'
+      );
+      
+      console.log(`✅ Message sent successfully`);
+      res.json({ success: true });
+    } else {
+      // Save with failed status
+      await saveConversation(
+        phone, 
+        '', 
+        message, 
+        'agent', 
+        agentName, 
+        null,
+        'failed'
+      );
+      
+      console.log(`❌ Message failed to send`);
+      res.json({ success: false, message: 'Failed to send WhatsApp message' });
+    }
   } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
