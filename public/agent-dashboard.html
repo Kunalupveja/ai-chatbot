@@ -1,854 +1,973 @@
+require('dotenv').config();
+const express = require('express');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { createClient } = require('@supabase/supabase-js');
+const axios = require('axios');
+const bcrypt = require('bcryptjs');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Serve static files (for agent dashboard)
+app.use(express.static('public'));
+
+// Initialize Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
+// Initialize Gemini AI
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+const SYSTEM_PROMPT = `You are a friendly AI assistant for Nords Weight Loss Clinic, the first international weight loss clinic in East Africa. Your role is to warmly engage with potential clients and provide accurate, comprehensive information about our services.
+
+ABOUT NORDS WEIGHT LOSS CLINIC:
+- First international weight loss clinic in East Africa
+- Over 20,000 bariatric operations performed by Prof. Maleckas
+- Board-certified international expertise with gold-standard care
+- Located in Nairobi, Kenya - serving East African region
+- Contact: +254 711 728 728 | hello@nords.ke
+- Flexible payment packages available
+- 24/7 patient care and medical supervision
+- Free airport pickup/drop-off for procedures
+- Free accommodation before & after procedures
+- Multidisciplinary team: surgeons, nutritionist, psychologist, patient care specialists
+
+OUR EXPERT TEAM:
+
+1. Prof. Almantas Maleckas - Founder & Chief Surgeon
+   - Doctor of Medical Science, Professor of Surgery
+   - 30+ years of bariatric surgery experience across 3 continents (Europe, UAE, Africa)
+   - Performed and supervised over 20,000 bariatric operations
+   - UK General Medical Council (GMC) certified surgeon
+   - Pioneer in laparoscopic surgery
+   - 15+ years at Gothenburg University Hospital, Sweden
+   - London School of Economics graduate (MSc)
+   - Current: Professor at Lithuanian University of Health Sciences
+   - Consultant at Sahlgrenska University Hospital, Sweden
+   - Member of IFSO, EAES, ESSO, and other international surgical organizations
+
+2. Dr. Ali Hussein - Resident Bariatric Surgeon
+   - Specialized in minimally invasive weight loss procedures
+   - Extensive laparoscopic surgery experience
+   - Dedicated to patient safety and optimal outcomes
+   - Works closely with Prof. Maleckas on all procedures
+
+3. Dr. Evans Masitara (Dr. Evans Spanton) - Plastic & Reconstructive Surgeon
+   - Leading plastic surgeon in aesthetic and reconstructive procedures
+   - Specializes in post-weight loss body contouring
+   - Expert in skin removal and body reshaping
+   - Blends artistry with surgical precision
+   - Tailors each procedure to patient's goals
+
+4. Support Team:
+   - Eva Wamerema - Clinical Manager & Head of Patient Care
+   - Akinyi Wambui O - Counselling Psychologist (board-certified, specializing in weight loss)
+   - Margaret W. Irungu - Nutritionist
+
+COMPREHENSIVE SERVICES & PRICING:
+
+A. SURGICAL PROCEDURES:
+
+1. GASTRIC SLEEVE SURGERY (VSG - Vertical Sleeve Gastrectomy)
+   Price: KES 750,000 (~USD 5,810) - ALL-INCLUSIVE
+   - Most effective overall weight loss treatment
+   - 70-80% of stomach permanently removed
+   - Creates narrow sleeve-shaped stomach
+   - Reduces hunger hormone (ghrelin) production
+   - Expected weight loss: 60-70% of excess body weight in 12-24 months
+   - Improves/resolves: Type 2 diabetes, hypertension, sleep apnea, fatty liver
+   - Laparoscopic (minimally invasive) procedure
+   - Hospital stay: 1-2 days with 24/7 medical care
+   - Recovery: Walk within 1-2 days, return to activities gradually over weeks
+   - Irreversible but highly effective long-term
+   - Best for: Severe obesity or those who tried other treatments without success
+   Package includes: Surgery, surgeon/anesthetic fees, medications, lab tests, hospital stay, dietary guidance, 1 year follow-up, patient community access
+
+2. GASTRIC BYPASS SURGERY (Roux-en-Y)
+   Price: KES 750,000 (~USD 5,810) - ALL-INCLUSIVE
+   - Gold standard for significant weight loss
+   - Reduces stomach size AND reroutes digestive system
+   - Limits food intake and calorie absorption
+   - Expected weight loss: 70-80% of excess body weight within 2 years
+   - Improves: Type 2 diabetes, high cholesterol, hypertension, sleep apnea
+   - Reduces joint, back, and body pain
+   - Enhanced quality of life and energy levels
+   - Recovery: Light activity within 2 weeks
+   - Requires lifelong vitamin/mineral supplements
+   - Possible dumping syndrome (food moves too quickly to intestine)
+   Package includes: Surgery, all fees, medications, lab tests, 1-2 day hospital stay, dietary guidance, unlimited support team access, patient community
+
+B. NON-SURGICAL PROCEDURES:
+
+3. GASTRIC BALLOON (Intragastric Balloon)
+   Price: KES 350,000 (~USD 2,712) - ALL-INCLUSIVE
+   - MOST POPULAR non-surgical option in Nairobi
+   - Soft silicone balloon inserted into stomach, filled with saline/air
+   - Reduces stomach capacity, promotes satiety
+   - Expected weight loss: 10-20% of total body weight in 6 months
+   - Non-invasive, reversible, no permanent changes
+   - Balloon stays 6-12 months, then removed
+   - Minimal recovery time, most settle within days
+   - Temporary nausea/discomfort possible initially
+   - Best for: Moderate BMI, not ready for surgery
+   Package includes: Insertion (doctor fees, anesthesia, medication), removal after 6 months, dietary guidance, unlimited support access, patient community
+   
+4. ALLURION BALLOON
+   Price: KES 450,000 (~USD 3,890)
+   - Advanced balloon option
+   - Expected weight loss: 10-20% of body weight at 4 months
+   - Follow-ups to 1 year for maintenance
+   - Some weight maintained at 1 year
+
+5. ENDOSCOPIC SLEEVE GASTROPLASTY (ESG)
+   Price: KES 700,000 (~USD 5,423)
+   - Non-surgical alternative to gastric sleeve
+   - Endoscope inserted through mouth (no incisions, no scars)
+   - Stomach sutured internally to reduce volume
+   - Expected weight loss: 15-20% of total body weight at 1 year; ~30% with good adherence
+   - Potentially reversible (no tissue removed)
+   - Quick recovery: same-day discharge, resume activities in days
+   - Lower risk than surgery, but less dramatic than VSG
+   - Best for: Moderate obesity, want results without surgery
+   - Weaker hunger hormone reduction than VSG
+
+6. WEIGHT LOSS INJECTIONS (Mounjaro/GLP-1)
+   Price: From KES 75,000 (~USD 581) per month
+   - MOST COST-EFFECTIVE option
+   - Medically supervised program
+   - Regulates appetite, stabilizes blood sugar
+   - Expected weight loss: 15-20% of excess body weight; up to 15% total body weight
+   - Results visible: 1-3 months for initial, 6-12 months for substantial
+   - Targets metabolic pathways, reduces hunger
+   - Best for: Not ready for procedures, hormonal hunger issues, insulin resistance
+   - Requires long-term lifestyle changes to prevent regain
+   - Includes: Medication, follow-up, specialist support
+
+7. HELP PROGRAM (Behavioral/Nutrition/Therapy)
+   Price: KES 48,000 (~USD 372)
+   - 12-week comprehensive program
+   - Expected weight loss: 10-20% of excess body weight
+   - Behavioral therapy, nutrition counseling, psychological support
+   - Non-invasive lifestyle intervention
+   - Results measurable around 3 months
+
+COMPARISON GUIDE:
+- Most Effective: Gastric Sleeve Surgery (60-70% excess weight loss)
+- Most Popular: Gastric Balloon (non-surgical, affordable, reversible)
+- Most Cost-Effective: Weight Loss Injections (monthly payment, no procedure)
+- Middle Ground: ESG (non-surgical but more effective than balloon)
+- Gold Standard: Gastric Bypass (70-80% excess weight loss, metabolic benefits)
+
+FACILITIES & PATIENT CARE:
+- Modern reception and consultation rooms
+- State-of-the-art surgery rooms
+- Comfortable ward rooms with 24/7 nursing care
+- Triage and emergency response capabilities
+- Free airport transfers for procedure patients
+- Free accommodation before & after procedures
+- Two nights stay at clinic with medical supervision
+- 1 year nutritional & medical follow-up for all procedures
+- Pre & post psychological support
+- Access to supportive patient community
+- Unlimited access to support team (nurse, dietitian)
+
+WHAT MAKES NORDS UNIQUE:
+- Only UK GMC-certified bariatric surgeon in the region
+- International gold-standard care in East Africa
+- 20,000+ operations performed by Prof. Maleckas
+- Comprehensive multidisciplinary team approach
+- All-inclusive packages (no hidden costs)
+- Free airport pickup, accommodation included
+- 1 year follow-up support included
+- Board-certified counselling psychologist specializing in weight loss
+- Complete care under one roof: nutrition, psychology, surgery, plastic surgery
+- Proven results with compassionate, personalized care
+- Cultural sensitivity and local understanding
+
+ELIGIBILITY & REQUIREMENTS:
+- BMI typically ≥ 29-30 for most procedures
+- Previous weight loss attempts reviewed
+- Medical suitability assessment required
+- Behavioral readiness evaluation
+- Free consultation to determine best option
+
+YOUR CONVERSATION APPROACH:
+1. Warmly greet and understand their weight loss goals, challenges, timeline
+2. Ask about BMI, previous attempts, health conditions if relevant
+3. Recommend specific procedures based on their situation:
+   - Severe obesity / tried everything → Gastric Sleeve or Bypass
+   - Moderate obesity / want non-surgical → Gastric Balloon or ESG
+   - Not ready for procedures / budget-conscious → Injections or HELP Program
+   - Post-weight loss skin issues → Plastic surgery with Dr. Evans
+4. Provide specific pricing when asked (all prices listed above)
+5. Explain procedures in simple terms, highlight safety and Prof. Maleckas' expertise
+6. Mention all-inclusive packages, free airport pickup, accommodation
+7. Address recovery times, expected results, and realistic expectations
+8. Invite to FREE consultation: Call +254 711 728 728 or email hello@nords.ke
+9. Keep responses conversational, supportive, concise (2-4 sentences)
+10. Celebrate their decision to take control of their health
+
+IMPORTANT GUIDELINES:
+- Never provide medical diagnoses or guarantee specific results
+- Always recommend in-person consultation for personalized medical advice
+- Be honest about recovery times and realistic expectations
+- Emphasize Prof. Maleckas' 20,000+ operations and international expertise
+- Show empathy for their weight loss journey
+- Mention that results vary by individual, adherence to lifestyle changes crucial
+- For pricing questions, provide the specific prices listed above
+- Highlight all-inclusive nature of packages (no hidden costs)
+
+Remember: You're having a supportive conversation with someone taking a brave step toward better health. Be warm, informative, specific, and encouraging!`;
+
+// Database Functions
+async function saveLead(leadInfo) {
+  try {
+    const { data, error } = await supabase
+      .from('leads')
+      .insert([{
+        name: leadInfo.name,
+        phone: leadInfo.phone,
+        email: leadInfo.email,
+        industry: leadInfo.industry,
+        lead_source: leadInfo.leadSource,
+        received_at: new Date().toISOString()
+      }])
+      .select();
+
+    if (error) throw error;
+    console.log('✅ Lead saved to database');
+    return data[0];
+  } catch (error) {
+    console.error('❌ Database error:', error.message);
+    return null;
+  }
+}
+
+async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = 'ai', agentName = null) {
+  try {
+    const { error } = await supabase
+      .from('conversations')
+      .insert([{
+        phone_number: phoneNumber,
+        user_message: userMessage,
+        ai_response: aiResponse,
+        sent_by: sentBy,
+        agent_name: agentName,
+        created_at: new Date().toISOString()
+      }]);
+
+    if (error) throw error;
+    console.log('✅ Conversation saved');
+  } catch (error) {
+    console.error('❌ Conversation save error:', error.message);
+  }
+}
+
+async function getConversationHistory(phoneNumber, limit = 10) {
+  try {
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('phone_number', phoneNumber)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return data.reverse(); // Return oldest first
+  } catch (error) {
+    console.error('❌ Error fetching history:', error.message);
+    return [];
+  }
+}
+
+async function getAllLeads(limit = 100) {
+  try {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .order('received_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('❌ Error fetching leads:', error.message);
+    return [];
+  }
+}
+
+async function getStats() {
+  try {
+    const { count: leadsCount } = await supabase
+      .from('leads')
+      .select('*', { count: 'exact', head: true });
+
+    const { data: uniquePhones } = await supabase
+      .from('conversations')
+      .select('phone_number')
+      .limit(1000);
+
+    const uniqueCount = new Set(uniquePhones?.map(c => c.phone_number)).size;
+
+    return {
+      totalLeads: leadsCount || 0,
+      activeConversations: uniqueCount || 0
+    };
+  } catch (error) {
+    console.error('❌ Error fetching stats:', error.message);
+    return { totalLeads: 0, activeConversations: 0 };
+  }
+}
+
+// ============================================
+// AGENT DASHBOARD FUNCTIONS
+// ============================================
+
+async function getConversationMode(phoneNumber) {
+  try {
+    const { data, error } = await supabase
+      .from('conversation_modes')
+      .select('*')
+      .eq('phone_number', phoneNumber)
+      .single();
+
+    if (error && error.code !== 'PGRST116') throw error;
+    return data || { mode: 'ai', agent_id: null, agent_name: null };
+  } catch (error) {
+    console.error('❌ Error getting mode:', error.message);
+    return { mode: 'ai', agent_id: null, agent_name: null };
+  }
+}
+
+async function setConversationMode(phoneNumber, mode, agentId = null, agentName = null) {
+  try {
+    const { error } = await supabase
+      .from('conversation_modes')
+      .upsert({
+        phone_number: phoneNumber,
+        mode: mode,
+        agent_id: agentId,
+        agent_name: agentName,
+        taken_over_at: mode === 'agent' ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString()
+      });
+
+    if (error) throw error;
+    console.log(`✅ Mode set to ${mode} for ${phoneNumber}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error setting mode:', error.message);
+    return false;
+  }
+}
+
+async function authenticateAgent(username, password) {
+  try {
+    const { data, error } = await supabase
+      .from('agents')
+      .select('*')
+      .eq('username', username)
+      .eq('active', true)
+      .single();
+
+    if (error) return null;
+    
+    // For demo, accept any password (in production, use bcrypt.compare)
+    // const isValid = await bcrypt.compare(password, data.password_hash);
+    const isValid = password === 'password123'; // Demo only
+    
+    if (isValid) {
+      return {
+        id: data.id,
+        username: data.username,
+        name: data.name,
+        email: data.email
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ Auth error:', error.message);
+    return null;
+  }
+}
+
+async function getAllConversationsForDashboard() {
+  try {
+    // Get all leads with their latest conversation
+    const { data: leads, error: leadsError } = await supabase
+      .from('leads')
+      .select('*')
+      .order('received_at', { ascending: false })
+      .limit(100);
+
+    if (leadsError) throw leadsError;
+
+    const conversations = [];
+
+    for (const lead of leads) {
+      // Skip leads that are blocked in test mode
+      if (lead.industry && lead.industry.includes('WhatsApp Blocked')) {
+        console.log(`⚠️  Skipping blocked lead: ${lead.name} (${lead.phone})`);
+        continue;
+      }
+      
+      // Get latest message
+      const { data: messages } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('phone_number', lead.phone)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      // Only show in dashboard if there's at least one conversation
+      if (messages && messages.length > 0) {
+        // Get conversation mode
+        const mode = await getConversationMode(lead.phone);
+
+        conversations.push({
+          phone: lead.phone,
+          name: lead.name,
+          email: lead.email,
+          industry: lead.industry,
+          mode: mode.mode,
+          agentId: mode.agent_id,
+          agentName: mode.agent_name,
+          lastMessage: messages[0].created_at,
+          preview: messages[0].user_message || messages[0].ai_response
+        });
+      }
+    }
+
+    return conversations;
+  } catch (error) {
+    console.error('❌ Error getting conversations:', error.message);
+    return [];
+  }
+}
+
+// Normalize phone number - remove all non-digits
+function normalizePhone(phone) {
+  if (!phone) return '';
+  return phone.replace(/[^\d]/g, '');
+}
+
+function extractLeadInfo(zohoPayload) {
+  try {
+    let lead = zohoPayload.data?.[0] || zohoPayload;
+    
+    return {
+      name: lead.Name || lead.Full_Name || 'Valued Customer',
+      phone: normalizePhone(lead.Phone || lead.Mobile || ''),
+      email: lead.Email || '',
+      industry: lead.Service || lead.Industry || '',
+      leadSource: lead.Lead_Source || lead.Source || 'Unknown'
+    };
+  } catch (error) {
+    console.error('❌ Error extracting lead:', error);
+    throw new Error('Invalid payload');
+  }
+}
+
+async function sendWhatsAppMessage(to, message) {
+  try {
+    const cleanPhone = normalizePhone(to);
+    const url = `https://graph.facebook.com/v18.0/${process.env.META_PHONE_NUMBER_ID}/messages`;
+    
+    const response = await axios.post(url, {
+      messaging_product: 'whatsapp',
+      to: cleanPhone,
+      type: 'text',
+      text: { body: message }
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.META_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log('✅ WhatsApp sent');
+    return { success: true, data: response.data };
+  } catch (error) {
+    console.error('❌ WhatsApp error:', error.response?.data || error.message);
+    
+    // Check if it's a recipient error (not in test recipients)
+    const errorMessage = error.response?.data?.error?.message || '';
+    const isRecipientError = errorMessage.includes('recipient') || 
+                            errorMessage.includes('not a valid') ||
+                            error.response?.data?.error?.code === 131026;
+    
+    return { 
+      success: false, 
+      error: error.response?.data || error.message,
+      isRecipientError 
+    };
+  }
+}
+
+async function generateAIResponse(phoneNumber, userMessage, leadInfo = null) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    // Get conversation history from database
+    const history = await getConversationHistory(phoneNumber, 10);
+    
+    let fullPrompt = SYSTEM_PROMPT + '\n\n';
+    
+    if (leadInfo && history.length === 0) {
+      fullPrompt += `New lead: ${leadInfo.name}, interested in ${leadInfo.industry || 'weight loss services'}.\n\n`;
+    }
+    
+    if (history.length > 0) {
+      fullPrompt += 'Previous conversation:\n';
+      history.forEach(msg => {
+        fullPrompt += `User: ${msg.user_message}\n`;
+        fullPrompt += `You: ${msg.ai_response}\n`;
+      });
+      fullPrompt += '\n';
+    }
+    
+    fullPrompt += `User: ${userMessage}\n\nYour response:`;
+    
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    // Save conversation to database
+    await saveConversation(phoneNumber, userMessage, text);
+    
+    console.log('✅ AI response generated');
+    return text;
+    
+  } catch (error) {
+    console.error('❌ AI error:', error.message);
+    
+    if (leadInfo) {
+      return `Hi ${leadInfo.name}! 👋\n\nThank you for your interest in ${leadInfo.industry || 'our services'}. We're excited to help you achieve your wellness goals!\n\nHow can I assist you today?`;
+    }
+    return "Thank you for your message! How can I help you today?";
+  }
+}
+
+// Zoho Webhook
+app.post('/webhook/zoho-lead', async (req, res) => {
+  console.log('\n🎉 NEW LEAD FROM ZOHO!');
+
+  try {
+    const leadInfo = extractLeadInfo({ ...req.body, ...req.query });
+    
+    console.log('✅ Lead processed:', leadInfo.name);
+
+    if (!leadInfo.phone) {
+      return res.status(400).json({ success: false, error: 'Phone required' });
+    }
+
+    // Save to database first
+    const savedLead = await saveLead(leadInfo);
+
+    console.log('🤖 Generating message...');
+    const welcomeMessage = await generateAIResponse(
+      leadInfo.phone,
+      `Hi, I'm ${leadInfo.name}. I'm interested in ${leadInfo.industry || 'weight loss services'}.`,
+      leadInfo
+    );
+
+    console.log('📱 Sending WhatsApp...');
+    const whatsappResult = await sendWhatsAppMessage(leadInfo.phone, welcomeMessage);
+
+    if (!whatsappResult.success) {
+      if (whatsappResult.isRecipientError) {
+        console.log('⚠️  WhatsApp Test Mode: Phone not in test recipients');
+        console.log('⚠️  Lead saved but message not sent (test mode restriction)');
+        
+        // Mark this lead as "test mode blocked" in database
+        await supabase
+          .from('leads')
+          .update({ 
+            lead_source: `${leadInfo.leadSource} (Test Mode - Not Sent)`,
+            industry: `${leadInfo.industry} - WhatsApp Blocked`
+          })
+          .eq('phone', leadInfo.phone);
+        
+        return res.json({ 
+          success: true, 
+          message: 'Lead saved but WhatsApp blocked (test mode)',
+          warning: 'Phone not in Meta test recipients'
+        });
+      } else {
+        // Other WhatsApp error
+        console.error('❌ WhatsApp send failed:', whatsappResult.error);
+        return res.status(500).json({ 
+          success: false, 
+          error: 'WhatsApp send failed',
+          details: whatsappResult.error
+        });
+      }
+    }
+
+    res.json({ success: true, message: 'Lead processed and message sent' });
+
+  } catch (error) {
+    console.error('❌ Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// WhatsApp Webhook - Verification
+app.get('/webhook/whatsapp', (req, res) => {
+  const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
+  
+  if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
+    console.log('✅ WhatsApp verified');
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
+});
+
+// WhatsApp Webhook - Messages
+app.post('/webhook/whatsapp', async (req, res) => {
+  console.log('\n📱 WHATSAPP MESSAGE');
+  
+  try {
+    if (req.body.object === 'whatsapp_business_account') {
+      for (const entry of req.body.entry) {
+        for (const change of entry.changes) {
+          if (change.field === 'messages' && change.value.messages) {
+            for (const message of change.value.messages) {
+              if (message.type === 'text' && message.text?.body) {
+                const from = normalizePhone(message.from);
+                const text = message.text.body;
+                
+                console.log(`From: ${from}`);
+                console.log(`Message: ${text}`);
+                
+                // Check conversation mode
+                const mode = await getConversationMode(from);
+                console.log(`Mode: ${mode.mode}, Agent: ${mode.agent_name || 'None'}`);
+                
+                if (mode.mode === 'agent') {
+                  // Agent mode - just save message, don't respond
+                  console.log(`⚠️  Agent mode - message saved for agent ${mode.agent_name}`);
+                  await saveConversation(from, text, '', 'user');
+                } else {
+                  // AI mode - generate and send response
+                  console.log('🤖 AI mode - generating response');
+                  const aiResponse = await generateAIResponse(from, text);
+                  await sendWhatsAppMessage(from, aiResponse);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('❌ Error:', error);
+    res.sendStatus(500);
+  }
+});
+
+// ============================================
+// AGENT DASHBOARD API ENDPOINTS
+// ============================================
+
+// Agent login
+app.post('/api/agent/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const agent = await authenticateAgent(username, password);
+    
+    if (agent) {
+      res.json({ success: true, agent });
+    } else {
+      res.json({ success: false, message: 'Invalid credentials' });
+    }
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Get all conversations
+app.get('/api/conversations', async (req, res) => {
+  try {
+    const conversations = await getAllConversationsForDashboard();
+    res.json({ success: true, conversations });
+  } catch (error) {
+    console.error('Get conversations error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Get messages for a conversation
+app.get('/api/conversations/:phone/messages', async (req, res) => {
+  try {
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
+    const { data: messages, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('phone_number', phone)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    // Get lead info
+    const { data: lead } = await supabase
+      .from('leads')
+      .select('name')
+      .eq('phone', phone)
+      .single();
+
+    const formattedMessages = [];
+    
+    messages.forEach(msg => {
+      // Add user message if exists and not empty
+      if (msg.user_message && msg.user_message.trim() !== '' && msg.user_message !== 'EMPTY') {
+        formattedMessages.push({
+          type: 'user',
+          text: msg.user_message,
+          timestamp: msg.created_at,
+          name: lead?.name || 'Customer',
+          agentName: null
+        });
+      }
+      
+      // Add AI/agent response if exists and not empty
+      if (msg.ai_response && msg.ai_response.trim() !== '' && msg.ai_response !== 'EMPTY') {
+        formattedMessages.push({
+          type: msg.sent_by || 'ai',
+          text: msg.ai_response,
+          timestamp: msg.created_at,
+          name: lead?.name || 'Customer',
+          agentName: msg.agent_name || null
+        });
+      }
+    });
+
+    res.json({ success: true, messages: formattedMessages });
+  } catch (error) {
+    console.error('Get messages error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Take over conversation
+app.post('/api/conversations/:phone/takeover', async (req, res) => {
+  try {
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
+    const { agentId, agentName } = req.body;
+    
+    console.log(`🔄 Takeover request: ${phone} by ${agentName}`);
+    const success = await setConversationMode(phone, 'agent', agentId, agentName);
+    
+    if (success) {
+      console.log(`✅ Takeover successful for ${phone}`);
+    } else {
+      console.log(`❌ Takeover failed for ${phone}`);
+    }
+    
+    res.json({ success });
+  } catch (error) {
+    console.error('Takeover error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Release conversation to AI
+app.post('/api/conversations/:phone/release', async (req, res) => {
+  try {
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
+    
+    console.log(`🔄 Release request: ${phone} back to AI`);
+    const success = await setConversationMode(phone, 'ai', null, null);
+    
+    if (success) {
+      console.log(`✅ Released ${phone} to AI`);
+    } else {
+      console.log(`❌ Release failed for ${phone}`);
+    }
+    
+    res.json({ success });
+  } catch (error) {
+    console.error('Release error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Send message as agent
+app.post('/api/conversations/:phone/send', async (req, res) => {
+  try {
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
+    const { message, agentId, agentName } = req.body;
+    
+    console.log(`📤 Agent ${agentName} sending message to ${phone}`);
+    
+    // Send WhatsApp message
+    await sendWhatsAppMessage(phone, message);
+    
+    // Save to database with agent name
+    await saveConversation(phone, '', message, 'agent', agentName);
+    
+    console.log(`✅ Message sent successfully`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Send message error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Serve agent dashboard
+app.get('/agent-dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'agent-dashboard.html'));
+});
+
+// Dashboard
+app.get('/', async (req, res) => {
+  const leads = await getAllLeads(50);
+  const stats = await getStats();
+  
+  const html = `
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
+    <title>AI Chatbot Dashboard - Supabase</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nords Agent Dashboard</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f7fa;
-            height: 100vh;
-            overflow: hidden;
-        }
-
-        /* Login Screen */
-        .login-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
         }
-
-        .login-box {
-            background: white;
-            padding: 40px;
-            border-radius: 15px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            width: 400px;
-        }
-
-        .login-box h1 {
-            color: #667eea;
-            margin-bottom: 10px;
-        }
-
-        .login-box p {
-            color: #6b7280;
-            margin-bottom: 30px;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            color: #374151;
-            font-weight: 500;
-        }
-
-        .form-group input {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e5e7eb;
-            border-radius: 8px;
-            font-size: 14px;
-        }
-
-        .form-group input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .btn-login {
-            width: 100%;
-            padding: 12px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-        }
-
-        .btn-login:hover {
-            opacity: 0.9;
-        }
-
-        /* Dashboard Layout */
-        .dashboard {
-            display: none;
-            height: 100vh;
-            flex-direction: column;
-        }
-
-        .dashboard.active {
-            display: flex;
-        }
-
-        /* Header */
+        .container { max-width: 1200px; margin: 0 auto; }
         .header {
             background: white;
-            padding: 15px 30px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
         }
-
-        .header h1 {
-            color: #667eea;
-            font-size: 24px;
-        }
-
-        .agent-info {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .agent-name {
-            font-weight: 600;
-            color: #374151;
-        }
-
-        .btn-logout {
-            padding: 8px 16px;
-            background: #ef4444;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-        }
-
-        /* Main Content */
-        .main-content {
-            display: flex;
-            flex: 1;
-            overflow: hidden;
-        }
-
-        /* Conversations List */
-        .conversations-panel {
-            width: 350px;
-            background: white;
-            border-right: 1px solid #e5e7eb;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .panel-header {
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
-        }
-
-        .panel-header h2 {
-            color: #374151;
-            font-size: 18px;
-            margin-bottom: 10px;
-        }
-
-        .search-box {
-            width: 100%;
-            padding: 10px;
-            border: 2px solid #e5e7eb;
-            border-radius: 8px;
-            font-size: 14px;
-        }
-
-        .conversations-list {
-            flex: 1;
-            overflow-y: auto;
-        }
-
-        .conversation-item {
-            padding: 15px 20px;
-            border-bottom: 1px solid #e5e7eb;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .conversation-item:hover {
-            background: #f9fafb;
-        }
-
-        .conversation-item.active {
-            background: #ede9fe;
-            border-left: 4px solid #667eea;
-        }
-
-        .conversation-item.ai-mode {
-            border-left: 4px solid #10b981;
-        }
-
-        .conversation-item.agent-mode {
-            border-left: 4px solid #f59e0b;
-        }
-
-        .conv-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 5px;
-        }
-
-        .conv-name {
-            font-weight: 600;
-            color: #374151;
-        }
-
-        .conv-time {
-            font-size: 12px;
-            color: #9ca3af;
-        }
-
-        .conv-preview {
-            font-size: 14px;
-            color: #6b7280;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .mode-badge {
+        h1 { color: #667eea; font-size: 32px; }
+        .badge-db {
             display: inline-block;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-top: 5px;
-        }
-
-        .mode-badge.ai {
-            background: #d1fae5;
-            color: #065f46;
-        }
-
-        .mode-badge.agent {
-            background: #fef3c7;
-            color: #92400e;
-        }
-
-        /* Chat Panel */
-        .chat-panel {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: #f9fafb;
-            min-height: 0; /* Important for flex scrolling */
-        }
-
-        .chat-header {
-            background: white;
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-shrink: 0; /* Prevent header from shrinking */
-        }
-
-        .chat-info h3 {
-            color: #374151;
-            margin-bottom: 5px;
-        }
-
-        .chat-meta {
-            font-size: 14px;
-            color: #6b7280;
-        }
-
-        .chat-actions {
-            display: flex;
-            gap: 10px;
-        }
-
-        .btn-takeover {
-            padding: 10px 20px;
-            background: #f59e0b;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-
-        .btn-release {
-            padding: 10px 20px;
             background: #10b981;
             color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-
-        /* Messages */
-        .messages-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            min-height: 0; /* Important for flex scrolling */
-        }
-
-        .message {
-            margin-bottom: 20px;
-            display: flex;
-            gap: 10px;
-        }
-
-        .message.user {
-            flex-direction: row-reverse;
-        }
-
-        .message-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            color: white;
-            flex-shrink: 0;
-        }
-
-        .message.user .message-avatar {
-            background: #667eea;
-        }
-
-        .message.ai .message-avatar {
-            background: #10b981;
-        }
-
-        .message.agent .message-avatar {
-            background: #f59e0b;
-        }
-
-        .message-content {
-            max-width: 70%;
-        }
-
-        .message.user .message-content {
-            text-align: right;
-        }
-
-        .message-bubble {
-            padding: 12px 16px;
-            border-radius: 12px;
-            display: inline-block;
-            text-align: left;
-        }
-
-        .message.user .message-bubble {
-            background: #667eea;
-            color: white;
-        }
-
-        .message.ai .message-bubble {
-            background: white;
-            color: #374151;
-        }
-
-        .message.agent .message-bubble {
-            background: #fef3c7;
-            color: #374151;
-        }
-
-        .message-time {
+            padding: 4px 12px;
+            border-radius: 20px;
             font-size: 12px;
-            color: #9ca3af;
-            margin-top: 5px;
+            margin-left: 10px;
         }
-
-        /* Message Input */
-        .message-input-container {
-            background: white;
-            padding: 20px;
-            border-top: 1px solid #e5e7eb;
-            flex-shrink: 0; /* Prevent input from shrinking */
-        }
-
-        .message-input-box {
-            display: flex;
-            gap: 10px;
-        }
-
-        .message-input {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #e5e7eb;
-            border-radius: 8px;
-            font-size: 14px;
-            resize: none;
-            font-family: inherit;
-            max-height: 120px; /* Limit textarea height */
-            min-height: 44px; /* Minimum height for 2 rows */
-        }
-
-        .message-input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .btn-send {
-            padding: 12px 24px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-
-        .btn-send:disabled {
-            background: #9ca3af;
-            cursor: not-allowed;
-        }
-
-        /* Empty State */
-        .empty-state {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            color: #9ca3af;
-        }
-
-        .empty-state-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-        }
-
-        /* Stats */
-        .stats-bar {
-            display: flex;
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
-            padding: 15px 20px;
-            background: #f9fafb;
-            border-bottom: 1px solid #e5e7eb;
+            margin-top: 20px;
         }
-
-        .stat-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
+        .stat-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
         }
-
-        .stat-label {
-            font-size: 14px;
-            color: #6b7280;
+        .stat-number { font-size: 36px; font-weight: bold; }
+        .stat-label { font-size: 14px; opacity: 0.9; margin-top: 5px; }
+        .lead-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
-
-        .stat-value {
-            font-weight: 600;
-            color: #374151;
-        }
-
-        .stat-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-        }
-
-        .stat-dot.ai {
-            background: #10b981;
-        }
-
-        .stat-dot.agent {
-            background: #f59e0b;
+        .lead-name { font-size: 24px; font-weight: bold; color: #1f2937; margin-bottom: 15px; }
+        .info-item { margin: 10px 0; }
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            background: #dbeafe;
+            color: #1e40af;
         }
     </style>
 </head>
 <body>
-    <!-- Login Screen -->
-    <div class="login-container" id="loginScreen">
-        <div class="login-box">
-            <h1>🤖 Agent Dashboard</h1>
-            <p>Nords Weight Loss Clinic</p>
-            <form id="loginForm">
-                <div class="form-group">
-                    <label>Username</label>
-                    <input type="text" id="username" placeholder="Enter your username" required>
-                </div>
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="password" placeholder="Enter your password" required>
-                </div>
-                <button type="submit" class="btn-login">Login</button>
-            </form>
-            <p style="margin-top: 20px; font-size: 12px; color: #9ca3af;">
-                Demo: agent1 / password123
-            </p>
-        </div>
-    </div>
-
-    <!-- Dashboard -->
-    <div class="dashboard" id="dashboard">
-        <!-- Header -->
+    <div class="container">
         <div class="header">
-            <h1>🤖 Agent Dashboard</h1>
-            <div class="agent-info">
-                <span class="agent-name" id="agentName">Agent</span>
-                <button class="btn-logout" onclick="logout()">Logout</button>
-            </div>
-        </div>
-
-        <!-- Main Content -->
-        <div class="main-content">
-            <!-- Conversations Panel -->
-            <div class="conversations-panel">
-                <div class="panel-header">
-                    <h2>Conversations</h2>
-                    <input type="text" class="search-box" placeholder="Search conversations..." id="searchBox">
+            <h1>🤖 AI Chatbot Dashboard <span class="badge-db">🗄️ Supabase</span></h1>
+            <p style="color: #6b7280; margin-top: 5px;">Gemini AI + WhatsApp + Zoho CRM + Supabase Database</p>
+            
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-number">${stats.totalLeads}</div>
+                    <div class="stat-label">Total Leads (Database)</div>
                 </div>
-                <div class="stats-bar">
-                    <div class="stat-item">
-                        <span class="stat-dot ai"></span>
-                        <span class="stat-label">AI Mode:</span>
-                        <span class="stat-value" id="aiCount">0</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-dot agent"></span>
-                        <span class="stat-label">Agent Mode:</span>
-                        <span class="stat-value" id="agentCount">0</span>
-                    </div>
+                <div class="stat-box">
+                    <div class="stat-number">${stats.activeConversations}</div>
+                    <div class="stat-label">Active Conversations</div>
                 </div>
-                <div class="conversations-list" id="conversationsList">
-                    <!-- Conversations will be loaded here -->
-                </div>
-            </div>
-
-            <!-- Chat Panel -->
-            <div class="chat-panel">
-                <div id="emptyState" class="empty-state">
-                    <div class="empty-state-icon">💬</div>
-                    <h3>Select a conversation</h3>
-                    <p>Choose a conversation from the list to start chatting</p>
-                </div>
-
-                <div id="chatContent" style="display: none; flex: 1; flex-direction: column; min-height: 0;">
-                    <div class="chat-header">
-                        <div class="chat-info">
-                            <h3 id="chatName">Customer Name</h3>
-                            <div class="chat-meta">
-                                <span id="chatPhone">+254712345678</span> • 
-                                <span id="chatEmail">email@example.com</span>
-                            </div>
-                        </div>
-                        <div class="chat-actions">
-                            <button class="btn-takeover" id="btnTakeover" onclick="takeoverConversation()">
-                                👤 Take Over
-                            </button>
-                            <button class="btn-release" id="btnRelease" onclick="releaseConversation()" style="display: none;">
-                                🤖 Release to AI
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="messages-container" id="messagesContainer">
-                        <!-- Messages will be loaded here -->
-                    </div>
-
-                    <div class="message-input-container">
-                        <div class="message-input-box">
-                            <textarea 
-                                class="message-input" 
-                                id="messageInput" 
-                                placeholder="Type your message..." 
-                                rows="2"
-                                disabled
-                            ></textarea>
-                            <button class="btn-send" id="btnSend" onclick="sendMessage()" disabled>
-                                Send
-                            </button>
-                        </div>
-                    </div>
+                <div class="stat-box">
+                    <div class="stat-number">✅</div>
+                    <div class="stat-label">System Online</div>
                 </div>
             </div>
         </div>
+
+        ${leads.map(lead => `
+            <div class="lead-card">
+                <div class="lead-name">👤 ${lead.name}</div>
+                <div class="info-item">📱 Phone: ${lead.phone}</div>
+                <div class="info-item">📧 Email: ${lead.email || 'N/A'}</div>
+                <div class="info-item">🏢 Service: <span class="badge">${lead.industry}</span></div>
+                <div class="info-item">📍 Source: ${lead.lead_source}</div>
+                <div class="info-item">⏰ ${new Date(lead.received_at).toLocaleString()}</div>
+            </div>
+        `).join('')}
     </div>
-
-    <script>
-        let currentAgent = null;
-        let currentConversation = null;
-        let conversations = [];
-        let refreshInterval = null;
-
-        // Login
-        document.getElementById('loginForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-
-            try {
-                const response = await fetch('/api/agent/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
-                });
-
-                const data = await response.json();
-                
-                if (data.success) {
-                    currentAgent = data.agent;
-                    document.getElementById('agentName').textContent = currentAgent.name;
-                    document.getElementById('loginScreen').style.display = 'none';
-                    document.getElementById('dashboard').classList.add('active');
-                    loadConversations();
-                    startAutoRefresh();
-                } else {
-                    alert('Invalid credentials');
-                }
-            } catch (error) {
-                console.error('Login error:', error);
-                alert('Login failed');
-            }
-        });
-
-        // Logout
-        function logout() {
-            currentAgent = null;
-            currentConversation = null;
-            stopAutoRefresh();
-            document.getElementById('dashboard').classList.remove('active');
-            document.getElementById('loginScreen').style.display = 'flex';
-            document.getElementById('username').value = '';
-            document.getElementById('password').value = '';
-        }
-
-        // Load conversations
-        async function loadConversations() {
-            try {
-                const response = await fetch('/api/conversations');
-                const data = await response.json();
-                conversations = data.conversations;
-                renderConversations();
-                updateStats();
-            } catch (error) {
-                console.error('Error loading conversations:', error);
-            }
-        }
-
-        // Render conversations list
-        function renderConversations() {
-            const list = document.getElementById('conversationsList');
-            list.innerHTML = '';
-
-            conversations.forEach(conv => {
-                const item = document.createElement('div');
-                item.className = `conversation-item ${conv.mode === 'ai' ? 'ai-mode' : 'agent-mode'}`;
-                if (currentConversation && currentConversation.phone === conv.phone) {
-                    item.className += ' active';
-                }
-
-                item.innerHTML = `
-                    <div class="conv-header">
-                        <span class="conv-name">${conv.name}</span>
-                        <span class="conv-time">${formatTime(conv.lastMessage)}</span>
-                    </div>
-                    <div class="conv-preview">${conv.preview}</div>
-                    <span class="mode-badge ${conv.mode}">${conv.mode === 'ai' ? '🤖 AI' : '👤 ' + conv.agentName}</span>
-                `;
-
-                item.onclick = () => selectConversation(conv);
-                list.appendChild(item);
-            });
-        }
-
-        // Select conversation
-        async function selectConversation(conv) {
-            currentConversation = conv;
-            renderConversations();
-            await loadMessages(conv.phone);
-            
-            document.getElementById('emptyState').style.display = 'none';
-            const chatContent = document.getElementById('chatContent');
-            chatContent.style.display = 'flex';
-            
-            document.getElementById('chatName').textContent = conv.name;
-            document.getElementById('chatPhone').textContent = conv.phone;
-            document.getElementById('chatEmail').textContent = conv.email || 'N/A';
-
-            updateChatControls();
-        }
-
-        // Load messages
-        async function loadMessages(phone) {
-            try {
-                const response = await fetch(`/api/conversations/${encodeURIComponent(phone)}/messages`);
-                const data = await response.json();
-                renderMessages(data.messages);
-            } catch (error) {
-                console.error('Error loading messages:', error);
-            }
-        }
-
-        // Render messages
-        function renderMessages(messages) {
-            const container = document.getElementById('messagesContainer');
-            container.innerHTML = '';
-
-            messages.forEach(msg => {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = `message ${msg.type}`;
-                
-                const avatar = msg.type === 'user' ? msg.name.charAt(0).toUpperCase() : 
-                              msg.type === 'ai' ? '🤖' : '👤';
-
-                messageDiv.innerHTML = `
-                    <div class="message-avatar">${avatar}</div>
-                    <div class="message-content">
-                        <div class="message-bubble">${msg.text}</div>
-                        <div class="message-time">${formatTime(msg.timestamp)}</div>
-                    </div>
-                `;
-
-                container.appendChild(messageDiv);
-            });
-
-            container.scrollTop = container.scrollHeight;
-        }
-
-        // Update chat controls
-        function updateChatControls() {
-            const isAgentMode = currentConversation.mode === 'agent' && 
-                               currentConversation.agentId === currentAgent.id;
-            const isAIMode = currentConversation.mode === 'ai';
-
-            document.getElementById('btnTakeover').style.display = isAIMode ? 'block' : 'none';
-            document.getElementById('btnRelease').style.display = isAgentMode ? 'block' : 'none';
-            document.getElementById('messageInput').disabled = !isAgentMode;
-            document.getElementById('btnSend').disabled = !isAgentMode;
-        }
-
-        // Takeover conversation
-        async function takeoverConversation() {
-            try {
-                const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/takeover`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ agentId: currentAgent.id, agentName: currentAgent.name })
-                });
-
-                const data = await response.json();
-                if (data.success) {
-                    currentConversation.mode = 'agent';
-                    currentConversation.agentId = currentAgent.id;
-                    currentConversation.agentName = currentAgent.name;
-                    updateChatControls();
-                    loadConversations();
-                }
-            } catch (error) {
-                console.error('Error taking over:', error);
-            }
-        }
-
-        // Release conversation
-        async function releaseConversation() {
-            try {
-                const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/release`, {
-                    method: 'POST'
-                });
-
-                const data = await response.json();
-                if (data.success) {
-                    currentConversation.mode = 'ai';
-                    currentConversation.agentId = null;
-                    currentConversation.agentName = null;
-                    updateChatControls();
-                    loadConversations();
-                }
-            } catch (error) {
-                console.error('Error releasing:', error);
-            }
-        }
-
-        // Send message
-        async function sendMessage() {
-            const input = document.getElementById('messageInput');
-            const message = input.value.trim();
-            
-            if (!message) return;
-
-            try {
-                const response = await fetch(`/api/conversations/${encodeURIComponent(currentConversation.phone)}/send`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        message,
-                        agentId: currentAgent.id,
-                        agentName: currentAgent.name
-                    })
-                });
-
-                const data = await response.json();
-                if (data.success) {
-                    input.value = '';
-                    await loadMessages(currentConversation.phone);
-                }
-            } catch (error) {
-                console.error('Error sending message:', error);
-            }
-        }
-
-        // Update stats
-        function updateStats() {
-            const aiCount = conversations.filter(c => c.mode === 'ai').length;
-            const agentCount = conversations.filter(c => c.mode === 'agent').length;
-            
-            document.getElementById('aiCount').textContent = aiCount;
-            document.getElementById('agentCount').textContent = agentCount;
-        }
-
-        // Auto refresh
-        function startAutoRefresh() {
-            refreshInterval = setInterval(() => {
-                loadConversations();
-                if (currentConversation) {
-                    loadMessages(currentConversation.phone);
-                }
-            }, 5000); // Refresh every 5 seconds
-        }
-
-        function stopAutoRefresh() {
-            if (refreshInterval) {
-                clearInterval(refreshInterval);
-            }
-        }
-
-        // Format time
-        function formatTime(timestamp) {
-            const date = new Date(timestamp);
-            const now = new Date();
-            const diff = now - date;
-            
-            if (diff < 60000) return 'Just now';
-            if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
-            if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-            return date.toLocaleDateString();
-        }
-
-        // Enter to send
-        document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('messageInput').addEventListener('keypress', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                }
-            });
-        });
-    </script>
 </body>
 </html>
+  `;
+  res.send(html);
+});
+
+app.get('/health', async (req, res) => {
+  const stats = await getStats();
+  res.json({
+    status: 'healthy',
+    database: 'supabase',
+    ...stats
+  });
+});
+
+// Test database connection on startup
+async function testDatabaseConnection() {
+  try {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('count')
+      .limit(1);
+    
+    if (error) throw error;
+    console.log('✅ Supabase connected successfully');
+  } catch (error) {
+    console.error('❌ Supabase connection error:', error.message);
+    console.log('⚠️  Server will continue but database features may not work');
+  }
+}
+
+app.listen(PORT, async () => {
+  console.log(`🚀 AI Chatbot Server running on port ${PORT}`);
+  console.log(`📍 Dashboard: http://localhost:${PORT}`);
+  console.log(`🗄️  Database: Supabase`);
+  await testDatabaseConnection();
+});
