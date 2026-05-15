@@ -775,6 +775,23 @@ app.post('/api/agent/login', async (req, res) => {
   }
 });
 
+// Get all agents (for assignment dropdown)
+app.get('/api/agents', async (req, res) => {
+  try {
+    const { data: agents, error } = await supabase
+      .from('agents')
+      .select('id, username, name, email')
+      .eq('active', true)
+      .order('name', { ascending: true });
+
+    if (error) throw error;
+    res.json({ success: true, agents });
+  } catch (error) {
+    console.error('Get agents error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // Get all conversations
 app.get('/api/conversations', async (req, res) => {
   try {
@@ -815,8 +832,7 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           text: msg.user_message,
           timestamp: msg.created_at,
           name: lead?.name || 'Customer',
-          agentName: null,
-          status: null // User messages don't have status
+          agentName: null
         });
       }
       
@@ -827,8 +843,7 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           text: msg.ai_response,
           timestamp: msg.created_at,
           name: lead?.name || 'Customer',
-          agentName: msg.agent_name || null,
-          status: msg.message_status || 'sent' // Include status for outgoing messages
+          agentName: msg.agent_name || null
         });
       }
     });
@@ -879,6 +894,43 @@ app.post('/api/conversations/:phone/release', async (req, res) => {
     res.json({ success });
   } catch (error) {
     console.error('Release error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Assign conversation to another agent
+app.post('/api/conversations/:phone/assign', async (req, res) => {
+  try {
+    const phone = normalizePhone(decodeURIComponent(req.params.phone));
+    const { targetAgentId, targetAgentName, fromAgentName } = req.body;
+    
+    console.log(`🔄 Assign request: ${phone} from ${fromAgentName} to ${targetAgentName}`);
+    
+    // Update conversation mode to new agent
+    const success = await setConversationMode(phone, 'agent', targetAgentId, targetAgentName);
+    
+    if (success) {
+      // Add a system message to conversation history
+      await supabase
+        .from('conversations')
+        .insert([{
+          phone_number: phone,
+          user_message: '',
+          ai_response: `[Conversation assigned from ${fromAgentName} to ${targetAgentName}]`,
+          sent_by: 'system',
+          agent_name: null,
+          message_status: null,
+          created_at: new Date().toISOString()
+        }]);
+      
+      console.log(`✅ Assigned ${phone} to ${targetAgentName}`);
+      res.json({ success: true });
+    } else {
+      console.log(`❌ Assignment failed for ${phone}`);
+      res.json({ success: false, message: 'Failed to assign conversation' });
+    }
+  } catch (error) {
+    console.error('Assign error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
