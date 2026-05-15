@@ -832,7 +832,8 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           text: msg.user_message,
           timestamp: msg.created_at,
           name: lead?.name || 'Customer',
-          agentName: null
+          agentName: null,
+          status: null // User messages don't have status
         });
       }
       
@@ -843,7 +844,8 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           text: msg.ai_response,
           timestamp: msg.created_at,
           name: lead?.name || 'Customer',
-          agentName: msg.agent_name || null
+          agentName: msg.agent_name || null,
+          status: msg.message_status || 'sent' // Include status for outgoing messages
         });
       }
     });
