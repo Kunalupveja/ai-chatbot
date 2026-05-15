@@ -421,30 +421,45 @@ async function getAllConversationsForDashboard() {
         continue;
       }
       
-      // Get latest message
+      // Get all messages for this lead
       const { data: messages } = await supabase
         .from('conversations')
         .select('*')
         .eq('phone_number', lead.phone)
-        .order('created_at', { ascending: false })
-        .limit(1);
+        .order('created_at', { ascending: false });
 
-      // Only show in dashboard if there's at least one conversation
+      // Only show in dashboard if:
+      // 1. There are messages AND
+      // 2. Either has user messages OR has successfully sent messages (not all failed)
       if (messages && messages.length > 0) {
-        // Get conversation mode
-        const mode = await getConversationMode(lead.phone);
+        const hasUserMessages = messages.some(m => m.sent_by === 'user');
+        const hasSuccessfulSent = messages.some(m => 
+          (m.sent_by === 'ai' || m.sent_by === 'agent') && 
+          m.message_status !== 'failed'
+        );
+        
+        // Only show if there's actual conversation (user replied) OR messages were successfully sent
+        if (hasUserMessages || hasSuccessfulSent) {
+          // Get conversation mode
+          const mode = await getConversationMode(lead.phone);
+          
+          // Get latest message for preview
+          const latestMessage = messages[0];
 
-        conversations.push({
-          phone: lead.phone,
-          name: lead.name,
-          email: lead.email,
-          industry: lead.industry,
-          mode: mode.mode,
-          agentId: mode.agent_id,
-          agentName: mode.agent_name,
-          lastMessage: messages[0].created_at,
-          preview: messages[0].user_message || messages[0].ai_response
-        });
+          conversations.push({
+            phone: lead.phone,
+            name: lead.name,
+            email: lead.email,
+            industry: lead.industry,
+            mode: mode.mode,
+            agentId: mode.agent_id,
+            agentName: mode.agent_name,
+            lastMessage: latestMessage.created_at,
+            preview: latestMessage.user_message || latestMessage.ai_response
+          });
+        } else {
+          console.log(`⚠️  Skipping conversation with only failed messages: ${lead.name} (${lead.phone})`);
+        }
       }
     }
 
