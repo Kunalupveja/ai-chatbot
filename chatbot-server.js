@@ -250,25 +250,55 @@ async function saveLead(leadInfo) {
   }
 }
 
-async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = 'ai', agentName = null, whatsappMessageId = null, messageStatus = 'sent') {
+async function saveConversation(phoneNumber, userMessage, aiResponse, sentBy = 'ai', agentName = null, whatsappMessageId = null, messageStatus = 'sent', mediaData = null) {
   try {
-    const { error } = await supabase
+    const conversationData = {
+      phone_number: phoneNumber,
+      user_message: userMessage,
+      ai_response: aiResponse,
+      sent_by: sentBy,
+      agent_name: agentName,
+      whatsapp_message_id: whatsappMessageId,
+      message_status: messageStatus,
+      created_at: new Date().toISOString()
+    };
+
+    // Add media data if present
+    if (mediaData) {
+      conversationData.media_type = mediaData.type;
+      conversationData.media_url = mediaData.url;
+      conversationData.media_id = mediaData.id;
+      conversationData.media_mime_type = mediaData.mimeType;
+      conversationData.media_filename = mediaData.filename;
+      conversationData.media_size = mediaData.size;
+      conversationData.media_caption = mediaData.caption;
+    }
+
+    const { error} = await supabase
       .from('conversations')
-      .insert([{
-        phone_number: phoneNumber,
-        user_message: userMessage,
-        ai_response: aiResponse,
-        sent_by: sentBy,
-        agent_name: agentName,
-        whatsapp_message_id: whatsappMessageId,
-        message_status: messageStatus,
-        created_at: new Date().toISOString()
-      }]);
+      .insert([conversationData]);
 
     if (error) throw error;
-    console.log('✅ Conversation saved');
+    console.log('✅ Conversation saved' + (mediaData ? ' with media' : ''));
   } catch (error) {
     console.error('❌ Conversation save error:', error.message);
+  }
+}
+
+async function getMediaUrl(mediaId) {
+  try {
+    const response = await axios.get(
+      `https://graph.facebook.com/v18.0/${mediaId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.META_ACCESS_TOKEN}`
+        }
+      }
+    );
+    return response.data.url;
+  } catch (error) {
+    console.error('❌ Error getting media URL:', error.message);
+    return null;
   }
 }
 
@@ -709,52 +739,182 @@ app.post('/webhook/whatsapp', async (req, res) => {
           // Handle incoming messages
           if (change.field === 'messages' && change.value.messages) {
             for (const message of change.value.messages) {
+              const from = normalizePhone(message.from);
+              const mode = await getConversationMode(from);
+              
+              console.log(`From: ${from}`);
+              console.log(`Type: ${message.type}`);
+              console.log(`Mode: ${mode.mode}, Agent: ${mode.agent_name || 'None'}`);
+              
+              let userMessage = '';
+              let mediaData = null;
+              
+              // Handle different message types
               if (message.type === 'text' && message.text?.body) {
-                const from = normalizePhone(message.from);
-                const text = message.text.body;
+                // Text message
+                userMessage = message.text.body;
+                console.log(`Message: ${userMessage}`);
                 
-                console.log(`From: ${from}`);
-                console.log(`Message: ${text}`);
+              } else if (message.type === 'image' && message.image) {
+                // Image message
+                userMessage = message.image.caption || '[Image]';
+                const mediaUrl = await getMediaUrl(message.image.id);
                 
-                // Check conversation mode
-                const mode = await getConversationMode(from);
-                console.log(`Mode: ${mode.mode}, Agent: ${mode.agent_name || 'None'}`);
+                mediaData = {
+                  type: 'image',
+                  url: mediaUrl,
+                  id: message.image.id,
+                  mimeType: message.image.mime_type,
+                  filename: message.image.filename || 'image.jpg',
+                  size: message.image.file_size || 0,
+                  caption: message.image.caption || null
+                };
                 
-                if (mode.mode === 'agent') {
-                  // Agent mode - just save message, don't respond
-                  console.log(`⚠️  Agent mode - message saved for agent ${mode.agent_name}`);
-                  await saveConversation(from, text, '', 'user');
-                } else {
-                  // AI mode - generate and send response
-                  console.log('🤖 AI mode - generating response');
-                  const aiResponse = await generateAIResponse(from, text);
-                  
-                  // Send WhatsApp message
-                  const whatsappResult = await sendWhatsAppMessage(from, aiResponse);
-                  
-                  // Save conversation with message ID
-                  if (whatsappResult.success) {
-                    await saveConversation(
-                      from, 
-                      text, 
-                      aiResponse, 
-                      'ai', 
-                      null, 
-                      whatsappResult.messageId,
-                      'sent'
-                    );
+                console.log(`📸 Image received: ${mediaData.filename} (${Math.round(mediaData.size/1024)}KB)`);
+                
+              } else if (message.type === 'video' && message.video) {
+                // Video message
+                userMessage = message.video.caption || '[Video]';
+                const mediaUrl = await getMediaUrl(message.video.id);
+                
+                mediaData = {
+                  type: 'video',
+                  url: mediaUrl,
+                  id: message.video.id,
+                  mimeType: message.video.mime_type,
+                  filename: message.video.filename || 'video.mp4',
+                  size: message.video.file_size || 0,
+                  caption: message.video.caption || null
+                };
+                
+                console.log(`🎥 Video received: ${mediaData.filename} (${Math.round(mediaData.size/1024)}KB)`);
+                
+              } else if (message.type === 'document' && message.document) {
+                // Document message
+                userMessage = message.document.caption || `[Document: ${message.document.filename}]`;
+                const mediaUrl = await getMediaUrl(message.document.id);
+                
+                mediaData = {
+                  type: 'document',
+                  url: mediaUrl,
+                  id: message.document.id,
+                  mimeType: message.document.mime_type,
+                  filename: message.document.filename || 'document.pdf',
+                  size: message.document.file_size || 0,
+                  caption: message.document.caption || null
+                };
+                
+                console.log(`📄 Document received: ${mediaData.filename} (${Math.round(mediaData.size/1024)}KB)`);
+                
+              } else if (message.type === 'audio' && message.audio) {
+                // Audio message
+                userMessage = '[Audio]';
+                const mediaUrl = await getMediaUrl(message.audio.id);
+                
+                mediaData = {
+                  type: 'audio',
+                  url: mediaUrl,
+                  id: message.audio.id,
+                  mimeType: message.audio.mime_type,
+                  filename: 'audio.ogg',
+                  size: message.audio.file_size || 0,
+                  caption: null
+                };
+                
+                console.log(`🎵 Audio received (${Math.round(mediaData.size/1024)}KB)`);
+                
+              } else if (message.type === 'voice' && message.voice) {
+                // Voice message
+                userMessage = '[Voice Message]';
+                const mediaUrl = await getMediaUrl(message.voice.id);
+                
+                mediaData = {
+                  type: 'voice',
+                  url: mediaUrl,
+                  id: message.voice.id,
+                  mimeType: message.voice.mime_type,
+                  filename: 'voice.ogg',
+                  size: message.voice.file_size || 0,
+                  caption: null
+                };
+                
+                console.log(`🎤 Voice message received (${Math.round(mediaData.size/1024)}KB)`);
+                
+              } else if (message.type === 'sticker' && message.sticker) {
+                // Sticker
+                userMessage = '[Sticker]';
+                const mediaUrl = await getMediaUrl(message.sticker.id);
+                
+                mediaData = {
+                  type: 'sticker',
+                  url: mediaUrl,
+                  id: message.sticker.id,
+                  mimeType: message.sticker.mime_type,
+                  filename: 'sticker.webp',
+                  size: message.sticker.file_size || 0,
+                  caption: null
+                };
+                
+                console.log(`😊 Sticker received`);
+                
+              } else {
+                // Unsupported message type
+                console.log(`⚠️  Unsupported message type: ${message.type}`);
+                continue;
+              }
+              
+              // Handle based on conversation mode
+              if (mode.mode === 'agent') {
+                // Agent mode - just save message, don't respond
+                console.log(`⚠️  Agent mode - message saved for agent ${mode.agent_name}`);
+                await saveConversation(from, userMessage, '', 'user', null, null, null, mediaData);
+                
+              } else {
+                // AI mode - generate and send response
+                console.log('🤖 AI mode - generating response');
+                
+                // For media messages, acknowledge receipt
+                let aiResponse;
+                if (mediaData) {
+                  if (mediaData.type === 'image') {
+                    aiResponse = `Thank you for sharing that photo! I've received it. How can I help you with your weight loss journey?`;
+                  } else if (mediaData.type === 'video') {
+                    aiResponse = `Thank you for sharing that video! I've received it. How can I assist you today?`;
+                  } else if (mediaData.type === 'document') {
+                    aiResponse = `Thank you for sharing that document! I've received it. How can I help you?`;
                   } else {
-                    // Save with failed status
-                    await saveConversation(
-                      from, 
-                      text, 
-                      aiResponse, 
-                      'ai', 
-                      null, 
-                      null,
-                      'failed'
-                    );
+                    aiResponse = `Thank you for your message! How can I assist you with your weight loss goals?`;
                   }
+                } else {
+                  aiResponse = await generateAIResponse(from, userMessage);
+                }
+                
+                // Send WhatsApp message
+                const whatsappResult = await sendWhatsAppMessage(from, aiResponse);
+                
+                // Save conversation with message ID and media data
+                if (whatsappResult.success) {
+                  await saveConversation(
+                    from, 
+                    userMessage, 
+                    aiResponse, 
+                    'ai', 
+                    null, 
+                    whatsappResult.messageId,
+                    'sent',
+                    mediaData
+                  );
+                } else {
+                  await saveConversation(
+                    from, 
+                    userMessage, 
+                    aiResponse, 
+                    'ai', 
+                    null, 
+                    null,
+                    'failed',
+                    mediaData
+                  );
                 }
               }
             }
@@ -848,7 +1008,15 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           timestamp: msg.created_at,
           name: lead?.name || 'Customer',
           agentName: null,
-          status: null // User messages don't have status
+          status: null, // User messages don't have status
+          // Media data
+          mediaType: msg.media_type,
+          mediaUrl: msg.media_url,
+          mediaId: msg.media_id,
+          mediaMimeType: msg.media_mime_type,
+          mediaFilename: msg.media_filename,
+          mediaSize: msg.media_size,
+          mediaCaption: msg.media_caption
         });
       }
       
@@ -860,7 +1028,15 @@ app.get('/api/conversations/:phone/messages', async (req, res) => {
           timestamp: msg.created_at,
           name: lead?.name || 'Customer',
           agentName: msg.agent_name || null,
-          status: msg.message_status || 'sent' // Include status for outgoing messages
+          status: msg.message_status || 'sent', // Include status for outgoing messages
+          // Media data (usually null for AI/agent responses)
+          mediaType: null,
+          mediaUrl: null,
+          mediaId: null,
+          mediaMimeType: null,
+          mediaFilename: null,
+          mediaSize: null,
+          mediaCaption: null
         });
       }
     });
