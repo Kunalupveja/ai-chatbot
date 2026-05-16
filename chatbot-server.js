@@ -433,29 +433,38 @@ async function authenticateAgent(username, password) {
 
 async function getAllConversationsForDashboard() {
   try {
-    // Get all leads with their latest conversation
-    const { data: leads, error: leadsError } = await supabase
-      .from('leads')
-      .select('*')
-      .order('received_at', { ascending: false })
-      .limit(100);
+    // Get all unique phone numbers from conversations
+    const { data: allConversations, error: convError } = await supabase
+      .from('conversations')
+      .select('phone_number')
+      .order('created_at', { ascending: false });
 
-    if (leadsError) throw leadsError;
+    if (convError) throw convError;
 
+    // Get unique phone numbers
+    const uniquePhones = [...new Set(allConversations.map(c => c.phone_number))];
+    
     const conversations = [];
 
-    for (const lead of leads) {
+    for (const phone of uniquePhones) {
+      // Get lead info (may not exist for incoming messages)
+      const { data: lead } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('phone', phone)
+        .single();
+
       // Skip leads that are blocked in test mode
-      if (lead.industry && lead.industry.includes('WhatsApp Blocked')) {
-        console.log(`⚠️  Skipping blocked lead: ${lead.name} (${lead.phone})`);
+      if (lead && lead.industry && lead.industry.includes('WhatsApp Blocked')) {
+        console.log(`⚠️  Skipping blocked lead: ${lead.name} (${phone})`);
         continue;
       }
       
-      // Get all messages for this lead
+      // Get all messages for this phone
       const { data: messages } = await supabase
         .from('conversations')
         .select('*')
-        .eq('phone_number', lead.phone)
+        .eq('phone_number', phone)
         .order('created_at', { ascending: false });
 
       // Only show in dashboard if:
@@ -471,16 +480,21 @@ async function getAllConversationsForDashboard() {
         // Only show if there's actual conversation (user replied) OR messages were successfully sent
         if (hasUserMessages || hasSuccessfulSent) {
           // Get conversation mode
-          const mode = await getConversationMode(lead.phone);
+          const mode = await getConversationMode(phone);
           
           // Get latest message for preview
           const latestMessage = messages[0];
 
+          // If no lead exists, create a temporary one for display
+          const displayName = lead ? lead.name : 'Unknown Contact';
+          const displayEmail = lead ? lead.email : '';
+          const displayIndustry = lead ? lead.industry : 'Incoming Message';
+
           conversations.push({
-            phone: lead.phone,
-            name: lead.name,
-            email: lead.email,
-            industry: lead.industry,
+            phone: phone,
+            name: displayName,
+            email: displayEmail,
+            industry: displayIndustry,
             mode: mode.mode,
             agentId: mode.agent_id,
             agentName: mode.agent_name,
@@ -488,10 +502,13 @@ async function getAllConversationsForDashboard() {
             preview: latestMessage.user_message || latestMessage.ai_response
           });
         } else {
-          console.log(`⚠️  Skipping conversation with only failed messages: ${lead.name} (${lead.phone})`);
+          console.log(`⚠️  Skipping conversation with only failed messages: ${lead?.name || phone} (${phone})`);
         }
       }
     }
+
+    // Sort by last message time (most recent first)
+    conversations.sort((a, b) => new Date(b.lastMessage) - new Date(a.lastMessage));
 
     return conversations;
   } catch (error) {
@@ -872,6 +889,29 @@ app.post('/webhook/whatsapp', async (req, res) => {
               } else {
                 // AI mode - generate and send response
                 console.log('🤖 AI mode - generating response');
+                
+                // Check if lead exists, if not create one
+                const { data: existingLead } = await supabase
+                  .from('leads')
+                  .select('*')
+                  .eq('phone', from)
+                  .single();
+                
+                if (!existingLead) {
+                  // Create new lead for incoming message
+                  await supabase
+                    .from('leads')
+                    .insert([{
+                      name: 'Unknown Contact',
+                      phone: from,
+                      email: '',
+                      industry: 'Incoming Message',
+                      lead_source: 'WhatsApp Direct',
+                      received_at: new Date().toISOString()
+                    }]);
+                  
+                  console.log(`✅ New lead created from incoming message: ${from}`);
+                }
                 
                 // For media messages, acknowledge receipt
                 let aiResponse;
