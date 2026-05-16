@@ -1174,6 +1174,90 @@ app.post('/api/conversations/:phone/send', async (req, res) => {
   }
 });
 
+// Start manual conversation
+app.post('/api/conversations/start', async (req, res) => {
+  try {
+    const { phone, name, message, agentId, agentName } = req.body;
+    
+    if (!phone || !message || !agentId || !agentName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Phone, message, agentId, and agentName are required' 
+      });
+    }
+    
+    const normalizedPhone = normalizePhone(phone);
+    
+    console.log(`📤 Manual chat started by ${agentName} to ${normalizedPhone}`);
+    
+    // Check if lead exists, if not create one
+    const { data: existingLead } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('phone', normalizedPhone)
+      .single();
+    
+    if (!existingLead) {
+      // Create new lead
+      await supabase
+        .from('leads')
+        .insert([{
+          name: name || 'Manual Contact',
+          phone: normalizedPhone,
+          email: '',
+          industry: 'Manual Chat',
+          lead_source: 'Manual Outreach',
+          received_at: new Date().toISOString()
+        }]);
+      
+      console.log(`✅ New lead created: ${name || 'Manual Contact'}`);
+    }
+    
+    // Send WhatsApp message
+    const whatsappResult = await sendWhatsAppMessage(normalizedPhone, message);
+    
+    if (whatsappResult.success) {
+      // Save conversation with agent mode
+      await saveConversation(
+        normalizedPhone,
+        '',
+        message,
+        'agent',
+        agentName,
+        whatsappResult.messageId,
+        'sent'
+      );
+      
+      // Set conversation mode to agent
+      await setConversationMode(normalizedPhone, 'agent', agentId, agentName);
+      
+      console.log(`✅ Manual chat message sent successfully`);
+      res.json({ success: true, message: 'Message sent successfully' });
+    } else {
+      // Save with failed status
+      await saveConversation(
+        normalizedPhone,
+        '',
+        message,
+        'agent',
+        agentName,
+        null,
+        'failed'
+      );
+      
+      console.log(`❌ Manual chat message failed to send`);
+      res.json({ 
+        success: false, 
+        message: 'Failed to send WhatsApp message',
+        error: whatsappResult.error
+      });
+    }
+  } catch (error) {
+    console.error('Start conversation error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // Proxy media endpoint (to handle WhatsApp authentication)
 app.get('/api/media/:mediaId', async (req, res) => {
   try {
