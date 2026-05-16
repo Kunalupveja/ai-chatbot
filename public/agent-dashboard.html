@@ -158,6 +158,24 @@
             margin-bottom: 10px;
         }
 
+        .btn-new-chat {
+            width: 100%;
+            padding: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 10px;
+            transition: opacity 0.2s;
+        }
+
+        .btn-new-chat:hover {
+            opacity: 0.9;
+        }
+
         .search-box {
             width: 100%;
             padding: 10px;
@@ -589,6 +607,36 @@
             cursor: not-allowed;
         }
 
+        /* Form Inputs */
+        .form-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+        }
+
+        .form-textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
         /* Empty State */
         .empty-state {
             display: flex;
@@ -799,6 +847,9 @@
             <div class="conversations-panel">
                 <div class="panel-header">
                     <h2>Conversations</h2>
+                    <button class="btn-new-chat" onclick="openNewChatModal()">
+                        ➕ New Chat
+                    </button>
                     <input type="text" class="search-box" placeholder="Search conversations..." id="searchBox">
                 </div>
                 <div class="stats-bar">
@@ -885,6 +936,37 @@
                 <button class="btn-modal btn-modal-cancel" onclick="closeAssignModal()">Cancel</button>
                 <button class="btn-modal btn-modal-confirm" id="btnConfirmAssign" onclick="confirmAssign()" disabled>
                     Assign
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Chat Modal -->
+    <div class="modal" id="newChatModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Start New Chat</h2>
+                <p>Enter phone number and initial message</p>
+            </div>
+            <div class="form-group">
+                <label>Phone Number</label>
+                <input type="tel" id="newChatPhone" placeholder="+254712345678 or 254712345678" class="form-input">
+                <small style="color: #6b7280; font-size: 12px; margin-top: 4px; display: block;">
+                    Include country code (e.g., +254 for Kenya, +91 for India)
+                </small>
+            </div>
+            <div class="form-group">
+                <label>Contact Name (Optional)</label>
+                <input type="text" id="newChatName" placeholder="John Doe" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Initial Message</label>
+                <textarea id="newChatMessage" placeholder="Hi! I'm reaching out from Nords Weight Loss Clinic..." class="form-textarea" rows="4"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-modal btn-modal-cancel" onclick="closeNewChatModal()">Cancel</button>
+                <button class="btn-modal btn-modal-confirm" id="btnStartChat" onclick="startNewChat()">
+                    Send Message
                 </button>
             </div>
         </div>
@@ -1509,6 +1591,98 @@
             } catch (error) {
                 console.error('Error assigning conversation:', error);
                 alert('Failed to assign conversation. Please try again.');
+            }
+        }
+
+        // New Chat functions
+        function openNewChatModal() {
+            if (!currentAgent) {
+                alert('Please login first');
+                return;
+            }
+
+            // Clear form
+            document.getElementById('newChatPhone').value = '';
+            document.getElementById('newChatName').value = '';
+            document.getElementById('newChatMessage').value = '';
+            
+            // Show modal
+            document.getElementById('newChatModal').classList.add('active');
+            
+            // Focus on phone input
+            setTimeout(() => {
+                document.getElementById('newChatPhone').focus();
+            }, 100);
+        }
+
+        function closeNewChatModal() {
+            document.getElementById('newChatModal').classList.remove('active');
+        }
+
+        async function startNewChat() {
+            const phone = document.getElementById('newChatPhone').value.trim();
+            const name = document.getElementById('newChatName').value.trim();
+            const message = document.getElementById('newChatMessage').value.trim();
+
+            // Validation
+            if (!phone) {
+                alert('Please enter a phone number');
+                document.getElementById('newChatPhone').focus();
+                return;
+            }
+
+            if (!message) {
+                alert('Please enter a message');
+                document.getElementById('newChatMessage').focus();
+                return;
+            }
+
+            // Disable button to prevent double-click
+            const btnStartChat = document.getElementById('btnStartChat');
+            btnStartChat.disabled = true;
+            btnStartChat.textContent = 'Sending...';
+
+            try {
+                const response = await fetch('/api/conversations/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        phone: phone,
+                        name: name || 'Manual Contact',
+                        message: message,
+                        agentId: currentAgent.id,
+                        agentName: currentAgent.name
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Close modal
+                    closeNewChatModal();
+                    
+                    // Reload conversations
+                    await loadConversations();
+                    
+                    // Find and select the new conversation
+                    const normalizedPhone = phone.replace(/[^\d]/g, '');
+                    const newConv = conversations.find(c => c.phone === normalizedPhone);
+                    
+                    if (newConv) {
+                        await selectConversation(newConv);
+                    }
+                    
+                    alert('Message sent successfully!');
+                } else {
+                    alert('Failed to send message: ' + (data.message || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error starting chat:', error);
+                alert('Failed to start chat. Please try again.');
+            } finally {
+                // Re-enable button
+                btnStartChat.disabled = false;
+                btnStartChat.textContent = 'Send Message';
             }
         }
     </script>
