@@ -486,7 +486,7 @@ async function getAllConversationsForDashboard() {
           const latestMessage = messages[0];
 
           // If no lead exists, create a temporary one for display
-          const displayName = lead ? lead.name : 'Unknown Contact';
+          const displayName = lead ? lead.name : phone; // Use phone number if no lead
           const displayEmail = lead ? lead.email : '';
           const displayIndustry = lead ? lead.industry : 'Incoming Message';
 
@@ -898,11 +898,11 @@ app.post('/webhook/whatsapp', async (req, res) => {
                   .single();
                 
                 if (!existingLead) {
-                  // Create new lead for incoming message
+                  // Create new lead for incoming message with phone as name
                   await supabase
                     .from('leads')
                     .insert([{
-                      name: 'Unknown Contact',
+                      name: from, // Use phone number as name
                       phone: from,
                       email: '',
                       industry: 'Incoming Message',
@@ -1242,7 +1242,7 @@ app.post('/api/conversations/start', async (req, res) => {
       await supabase
         .from('leads')
         .insert([{
-          name: name || 'Manual Contact',
+          name: name || normalizedPhone, // Use phone number if no name provided
           phone: normalizedPhone,
           email: '',
           industry: 'Manual Chat',
@@ -1250,7 +1250,7 @@ app.post('/api/conversations/start', async (req, res) => {
           received_at: new Date().toISOString()
         }]);
       
-      console.log(`✅ New lead created: ${name || 'Manual Contact'}`);
+      console.log(`✅ New lead created: ${name || normalizedPhone}`);
     }
     
     // Send WhatsApp message
