@@ -1120,7 +1120,7 @@
         let selectedAgentForAssign = null;
         let contextMenuMessage = null; // Store message for context menu actions
         let starredMessages = new Set(); // Store starred message IDs
-        let replyToMessage = null; // Store message being replied to
+        let replyToMessageData = null; // Store message being replied to
 
         // Login
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -1251,6 +1251,8 @@
             const container = document.getElementById('messagesContainer');
             container.innerHTML = '';
 
+            console.log('Rendering', messages.length, 'messages');
+
             messages.forEach((msg, index) => {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${msg.type}`;
@@ -1264,6 +1266,7 @@
                 
                 // Add context menu event listeners
                 messageDiv.addEventListener('contextmenu', (e) => {
+                    console.log('Right-click detected on message', index);
                     e.preventDefault();
                     showContextMenu(e, msg, index);
                 });
@@ -1272,6 +1275,7 @@
                 let pressTimer;
                 messageDiv.addEventListener('touchstart', (e) => {
                     pressTimer = setTimeout(() => {
+                        console.log('Long-press detected on message', index);
                         showContextMenu(e.touches[0], msg, index);
                     }, 500);
                 });
@@ -1346,6 +1350,7 @@
                 container.appendChild(messageDiv);
             });
 
+            console.log('Messages rendered, event listeners attached');
             container.scrollTop = container.scrollHeight;
         }
 
@@ -1866,40 +1871,60 @@
         // ============================================
 
         function showContextMenu(e, message, index) {
-            e.preventDefault();
+            console.log('showContextMenu called', e, message, index);
             
-            // Store message for context menu actions
-            contextMenuMessage = {
-                ...message,
-                index: index,
-                id: `${currentConversation.phone}_${index}`
-            };
-            
-            // Update star menu text
-            const starMenuText = document.getElementById('starMenuText');
-            starMenuText.textContent = starredMessages.has(contextMenuMessage.id) ? 'Unstar' : 'Star';
-            
-            // Show context menu
-            const menu = document.getElementById('contextMenu');
-            menu.classList.add('active');
-            
-            // Position menu
-            const x = e.clientX || e.pageX;
-            const y = e.clientY || e.pageY;
-            
-            menu.style.left = x + 'px';
-            menu.style.top = y + 'px';
-            
-            // Adjust if menu goes off screen
-            setTimeout(() => {
-                const rect = menu.getBoundingClientRect();
-                if (rect.right > window.innerWidth) {
-                    menu.style.left = (window.innerWidth - rect.width - 10) + 'px';
+            try {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                // Store message for context menu actions
+                contextMenuMessage = {
+                    ...message,
+                    index: index,
+                    id: `${currentConversation.phone}_${index}`
+                };
+                
+                console.log('Context menu message:', contextMenuMessage);
+                
+                // Update star menu text
+                const starMenuText = document.getElementById('starMenuText');
+                if (starMenuText) {
+                    starMenuText.textContent = starredMessages.has(contextMenuMessage.id) ? 'Unstar' : 'Star';
                 }
-                if (rect.bottom > window.innerHeight) {
-                    menu.style.top = (window.innerHeight - rect.height - 10) + 'px';
+                
+                // Show context menu
+                const menu = document.getElementById('contextMenu');
+                if (!menu) {
+                    console.error('Context menu element not found!');
+                    return;
                 }
-            }, 0);
+                
+                menu.classList.add('active');
+                
+                // Position menu
+                const x = e.clientX || e.pageX;
+                const y = e.clientY || e.pageY;
+                
+                console.log('Positioning menu at:', x, y);
+                
+                menu.style.left = x + 'px';
+                menu.style.top = y + 'px';
+                
+                // Adjust if menu goes off screen
+                setTimeout(() => {
+                    const rect = menu.getBoundingClientRect();
+                    if (rect.right > window.innerWidth) {
+                        menu.style.left = (window.innerWidth - rect.width - 10) + 'px';
+                    }
+                    if (rect.bottom > window.innerHeight) {
+                        menu.style.top = (window.innerHeight - rect.height - 10) + 'px';
+                    }
+                }, 0);
+                
+                console.log('Context menu shown');
+            } catch (error) {
+                console.error('Error showing context menu:', error);
+            }
         }
 
         function hideContextMenu() {
@@ -1921,7 +1946,7 @@
             hideContextMenu();
             
             // Store reply reference
-            replyToMessage = contextMenuMessage;
+            replyToMessageData = contextMenuMessage;
             
             // Update input placeholder
             const input = document.getElementById('messageInput');
