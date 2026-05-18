@@ -1329,9 +1329,18 @@ app.get('/api/media/:mediaId', async (req, res) => {
   }
 });
 
-// Serve agent dashboard
+// Serve React app in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, 'client/dist')));
+}
+
+// Serve agent dashboard (HTML fallback for development)
 app.get('/agent-dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'agent-dashboard.html'));
+  if (process.env.NODE_ENV === 'production') {
+    res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+  } else {
+    res.sendFile(path.join(__dirname, 'public', 'agent-dashboard.html'));
+  }
 });
 
 // Dashboard
@@ -1472,6 +1481,8 @@ async function testDatabaseConnection() {
 app.listen(PORT, async () => {
   console.log(`🚀 AI Chatbot Server running on port ${PORT}`);
   console.log(`📍 Dashboard: http://localhost:${PORT}`);
+  console.log(`👤 Agent Dashboard: http://localhost:${PORT}/agent-dashboard`);
   console.log(`🗄️  Database: Supabase`);
+  console.log(`⚛️  Frontend: ${process.env.NODE_ENV === 'production' ? 'React (Production)' : 'HTML (Development)'}`);
   await testDatabaseConnection();
 });
