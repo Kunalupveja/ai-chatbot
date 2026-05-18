@@ -5,7 +5,6 @@ const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const bcrypt = require('bcryptjs');
 const path = require('path');
-const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1330,25 +1329,9 @@ app.get('/api/media/:mediaId', async (req, res) => {
   }
 });
 
-// Serve React app (check if dist exists, otherwise fallback to HTML)
-const fs = require('fs');
-const reactDistPath = path.join(__dirname, 'client/dist');
-const hasReactBuild = fs.existsSync(reactDistPath);
-
-if (hasReactBuild) {
-  console.log('✅ Serving React app from client/dist/');
-  app.use(express.static(reactDistPath));
-} else {
-  console.log('⚠️  React build not found, serving HTML fallback');
-}
-
 // Serve agent dashboard
 app.get('/agent-dashboard', (req, res) => {
-  if (hasReactBuild) {
-    res.sendFile(path.join(reactDistPath, 'index.html'));
-  } else {
-    res.sendFile(path.join(__dirname, 'public', 'agent-dashboard.html'));
-  }
+  res.sendFile(path.join(__dirname, 'public', 'agent-dashboard.html'));
 });
 
 // Dashboard
@@ -1491,6 +1474,5 @@ app.listen(PORT, async () => {
   console.log(`📍 Dashboard: http://localhost:${PORT}`);
   console.log(`👤 Agent Dashboard: http://localhost:${PORT}/agent-dashboard`);
   console.log(`🗄️  Database: Supabase`);
-  console.log(`⚛️  Frontend: ${process.env.NODE_ENV === 'production' ? 'React (Production)' : 'HTML (Development)'}`);
   await testDatabaseConnection();
 });
