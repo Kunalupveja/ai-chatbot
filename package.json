@@ -4,7 +4,7 @@
   "description": "Zoho CRM webhook integration with Gemini AI chatbot, WhatsApp, and Supabase database",
   "main": "server.js",
   "scripts": {
-    "start": "NODE_ENV=production node chatbot-server-with-agents.js",
+    "start": "node chatbot-server-with-agents.js",
     "dev": "nodemon chatbot-server-with-agents.js",
     "client": "cd client && npm run dev",
     "client:build": "cd client && npm install && npm run build",
