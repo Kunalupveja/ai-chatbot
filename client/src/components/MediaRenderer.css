@@ -1,0 +1,111 @@
+.media-container {
+  margin: 10px 0;
+  max-width: 100%;
+}
+
+.media-image {
+  margin: 8px 0;
+}
+
+.media-image img {
+  display: block;
+  max-width: 300px;
+  max-height: 300px;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.media-image img:hover {
+  transform: scale(1.02);
+}
+
+.media-video {
+  margin: 8px 0;
+}
+
+.media-video video {
+  display: block;
+  max-width: 300px;
+  max-height: 300px;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.media-document {
+  padding: 12px 16px;
+  background: #f3f4f6;
+  border-radius: 8px;
+  border-left: 4px solid #667eea;
+  margin: 8px 0;
+  max-width: 300px;
+}
+
+.document-link {
+  color: #667eea;
+  text-decoration: none;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.document-link:hover {
+  text-decoration: underline;
+  color: #5568d3;
+}
+
+.media-audio {
+  margin: 8px 0;
+}
+
+.media-audio audio {
+  display: block;
+  max-width: 300px;
+  height: 40px;
+}
+
+.media-sticker {
+  margin: 8px 0;
+}
+
+.media-sticker img {
+  display: block;
+  max-width: 150px;
+  max-height: 150px;
+  width: auto;
+  height: auto;
+}
+
+.media-caption {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #6b7280;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.media-info {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+.message.user .media-container {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.message.ai .media-container,
+.message.agent .media-container {
+  background: rgba(0, 0, 0, 0.02);
+  padding: 8px;
+  border-radius: 8px;
+}
